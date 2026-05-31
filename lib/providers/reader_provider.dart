@@ -207,7 +207,7 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   void _syncProgress(int sentenceIndex) {
     final charOffset = _computeCharOffset(sentenceIndex);
     final totalProgress = _computeTotalProgress(state.currentChapterIndex, charOffset);
-    _progressController?.advance(charOffset, totalProgress);
+    _progressController?.advance(state.currentChapterIndex, charOffset, totalProgress);
     state = state.copyWith(
       currentSentenceIndex: sentenceIndex,
       charOffset: charOffset,
@@ -310,7 +310,7 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
       isPlaying: false,
       isPaused: false,
     );
-    await _progressController?.seekTo(0, totalProgress);
+    await _progressController?.seekTo(index, 0, totalProgress);
     AppLogger.instance.info('Chapter loaded: ${index + 1}/${state.chapters.length}');
   }
 
@@ -394,6 +394,16 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   Future<void> setAutoNextChapter(bool value) async {
     await _settings.setAutoNextChapter(value);
     state = state.copyWith(autoNextChapter: value);
+  }
+
+  /// Persist current reading position immediately.
+  /// Called from ReaderPage.dispose() so progress is saved on navigation away.
+  Future<void> persistProgress() async {
+    if (state.book == null || _progressController == null) return;
+    final charOffset = _computeCharOffset(state.currentSentenceIndex);
+    final totalProgress = _computeTotalProgress(state.currentChapterIndex, charOffset);
+    _progressController?.advance(state.currentChapterIndex, charOffset, totalProgress);
+    await _saveProgressImmediately();
   }
 
   // ---------------------------------------------------------------------------

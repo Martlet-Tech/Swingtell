@@ -28,8 +28,9 @@ class ReadingProgressController {
   /// Advance offset in memory only (high-frequency TTS callbacks).
   ///
   /// Does NOT persist — caller schedules persistence separately via [persist].
-  void advance(int charOffset, double totalProgress) {
+  void advance(int chapterIndex, int charOffset, double totalProgress) {
     _current = _current.copyWith(
+      chapterIndex: chapterIndex,
       charOffset: charOffset,
       totalProgress: totalProgress,
     );
@@ -43,8 +44,9 @@ class ReadingProgressController {
   }
 
   /// Seek to a position and persist immediately (user drag, chapter switch).
-  Future<void> seekTo(int charOffset, double totalProgress) async {
+  Future<void> seekTo(int chapterIndex, int charOffset, double totalProgress) async {
     _current = _current.copyWith(
+      chapterIndex: chapterIndex,
       charOffset: charOffset,
       totalProgress: totalProgress,
       lastReadAt: DateTime.now(),

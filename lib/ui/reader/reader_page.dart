@@ -135,7 +135,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
   @override
   void dispose() {
-    _notifier.pause();
+    _notifier.persistProgress();
     _scrollController.dispose();
     super.dispose();
   }
