@@ -3,10 +3,10 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../providers/reader_provider.dart';
-import '../../services/tts/device_tts.dart';
+import '../../providers/tts_player_provider.dart';
 import '../../services/tts/tts_base.dart';
+import '../../services/tts/tts_player.dart';
 import '../../utils/app_logger.dart';
 import '../../utils/constants.dart';
 import '../settings/tts_settings_sheet.dart';
@@ -28,23 +28,23 @@ class _SentenceItem {
 }
 
 class _ReaderPageState extends ConsumerState<ReaderPage> {
-  final DeviceTts _tts = DeviceTts();
+  late final TtsPlayer _player;
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _scrollViewKey = GlobalKey(debugLabel: 'scrollView');
-  bool _ttsReady = false;
   List<String> _sentences = [];
   List<GlobalKey> _sentenceKeys = [];
   int _currentSentenceIndex = 0;
   bool _isAutoScrolling = false;
   bool _needsRestore = true;
-  StreamSubscription<TtsEvent>? _ttsSubscription;
+  StreamSubscription<TtsPlaybackState>? _ttsStateSub;
   late final ReaderNotifier _notifier;
 
   @override
   void initState() {
     super.initState();
     _notifier = ref.read(readerProvider(widget.bookId).notifier);
-    _initTts();
+    _player = ref.read(ttsPlayerProvider);
+    _ttsStateSub = _player.state$.listen(_onPlayerStateChanged);
     Future.microtask(() async {
       await _notifier.loadBook();
       if (mounted) {
@@ -53,51 +53,21 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     });
   }
 
-  Future<void> _initTts() async {
-    try {
-      await _tts.init();
-      final prefs = await SharedPreferences.getInstance();
-      final speed = prefs.getDouble('tts_speed') ?? 1.0;
-      final pitch = prefs.getDouble('tts_pitch') ?? 1.0;
-      await _tts.setSpeed(speed);
-      await _tts.setPitch(pitch);
-      _notifier.setSpeed(speed);
-      _ttsSubscription = _tts.events.listen((event) {
-        if (event.type == TtsEventType.completed && mounted) {
-          _onTtsComplete();
-        } else if (event.type == TtsEventType.error) {
-          AppLogger.instance.error('TTS error: ${event.error ?? "unknown"}');
-        }
-      });
-      if (mounted) setState(() => _ttsReady = true);
-      AppLogger.instance.info('TTS initialized');
-    } catch (e) {
-      AppLogger.instance.error('TTS init failed', e);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('TTS 初始化失败: $e'), backgroundColor: Colors.red.shade700),
-        );
-      }
-    }
-  }
-
-  void _onTtsComplete() {
-    final notifier = _notifier;
-    final state = _notifier.state;
-    final oldOffset = state.charOffset;
-    if (_currentSentenceIndex < _sentences.length - 1) {
-      final sentLen = _sentences[_currentSentenceIndex].length;
-      notifier.updateCharOffset(oldOffset + sentLen);
-      notifier.saveProgress(); // checkpoint: sentence N done
-      setState(() => _currentSentenceIndex++);
-      AppLogger.instance.debug('TTS complete: charOffset ${oldOffset}→${oldOffset + sentLen}, idx ${_currentSentenceIndex - 1}→$_currentSentenceIndex');
+  void _onPlayerStateChanged(TtsPlaybackState playerState) {
+    if (!mounted) return;
+    final oldIndex = _currentSentenceIndex;
+    setState(() {
+      _currentSentenceIndex = playerState.currentIndex;
+    });
+    // Sync charOffset when TTS auto-advances during playback.
+    if (playerState.isPlaying && playerState.currentIndex != oldIndex) {
+      _syncCharOffsetFromIndex();
+      _notifier.saveProgress();
       _scrollToCurrentSentence();
-      _tts.speak(_sentences[_currentSentenceIndex]);
-    } else {
-      final sentLen = _sentences[_currentSentenceIndex].length;
-      notifier.updateCharOffset(oldOffset + sentLen);
-      AppLogger.instance.debug('TTS complete (last): charOffset ${oldOffset}→${oldOffset + sentLen}');
-      notifier.pause();
+    }
+    if (playerState.isCompleted) {
+      _syncCharOffsetFromIndex();
+      _notifier.saveProgress();
     }
   }
 
@@ -117,8 +87,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     });
   }
 
-  void _pauseTts() {
-    _tts.stop();
+  void _pauseTts() async {
+    await _player.pause();
     _notifier.pause();
     AppLogger.instance.info('TTS paused (user scroll) at sentence $_currentSentenceIndex');
   }
@@ -133,8 +103,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
 
     if (notification is ScrollStartNotification && notification.dragDetails != null) {
-      final state = _notifier.state;
-      if (state.isPlaying) {
+      if (_player.current.isPlaying) {
         _pauseTts();
       }
     } else if (notification is ScrollEndNotification && notification.dragDetails != null) {
@@ -175,6 +144,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
     if (bestIdx != _currentSentenceIndex) {
       setState(() => _currentSentenceIndex = bestIdx);
+      _player.seekTo(bestIdx);
       _syncCharOffsetFromIndex();
     }
   }
@@ -224,37 +194,34 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
   }
 
-  void _speak(String text) {
-    if (!_ttsReady) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('TTS 未就绪'), backgroundColor: Colors.orange),
-      );
-      return;
-    }
-    _tts.speak(text);
-    AppLogger.instance.debug('TTS speak: "${text.length > 30 ? '${text.substring(0, 30)}...' : text}"');
-  }
-
   void _togglePlayPause() {
-    final notifier = _notifier;
-    final state = _notifier.state;
-    if (state.isPlaying) {
-      _tts.stop();
-      notifier.pause();
-    } else if (state.isPaused) {
-      // flutter_tts 4.x has no resume; stop + re-speak
-      if (_currentSentenceIndex < _sentences.length) {
-        _speak(_sentences[_currentSentenceIndex]);
-      }
-      notifier.play();
-      _scrollToCurrentSentence();
-    } else {
+    final p = _player;
+    final ps = p.current;
+    if (ps.isPlaying) {
+      p.pause();
+      _notifier.pause();
+    } else if (ps.isPaused || ps.isCompleted) {
+      final state = _notifier.state;
       if (state.currentBlocks.isNotEmpty) {
         final items = _buildSentenceItems(state);
         _syncSentenceData(items);
         if (_sentences.isEmpty) return;
-        _speak(_sentences[_currentSentenceIndex]);
-        notifier.play();
+        if (ps.isCompleted) {
+          p.loadSentences(_sentences);
+        } else {
+          p.seekTo(_currentSentenceIndex);
+        }
+        p.play();
+        _scrollToCurrentSentence();
+      }
+    } else {
+      final state = _notifier.state;
+      if (state.currentBlocks.isNotEmpty) {
+        final items = _buildSentenceItems(state);
+        _syncSentenceData(items);
+        if (_sentences.isEmpty) return;
+        p.loadSentences(_sentences, startIndex: _currentSentenceIndex);
+        p.play();
         _scrollToCurrentSentence();
       }
     }
@@ -267,34 +234,28 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   }
 
   void _nextSentence() {
-    final notifier = _notifier;
     if (_currentSentenceIndex < _sentences.length - 1) {
-      setState(() => _currentSentenceIndex++);
-      _syncCharOffsetFromIndex();
+      _player.next();
       _scrollToCurrentSentence();
-      _speak(_sentences[_currentSentenceIndex]);
-      notifier.play();
     }
   }
 
   void _prevSentence() {
     if (_currentSentenceIndex > 0) {
-      setState(() => _currentSentenceIndex--);
-      _syncCharOffsetFromIndex();
+      _player.previous();
       _scrollToCurrentSentence();
-      _speak(_sentences[_currentSentenceIndex]);
     }
   }
 
   @override
   void dispose() {
-    _tts.stop(); // kill TTS engine immediately
     _syncCharOffsetFromIndex(); // sync position from index before save
     final saved = _notifier.state;
     AppLogger.instance.info('Dispose save: chapter=${saved.currentChapterIndex}, charOffset=${saved.charOffset}, idx=$_currentSentenceIndex, totalProgress=${saved.totalProgress}');
     _notifier.pause(); // save progress
-    _ttsSubscription?.cancel();
-    _tts.dispose();
+    _ttsStateSub?.cancel();
+    // NOTE: _player is NOT disposed here — it lives in ttsPlayerProvider
+    // and survives page navigation, enabling background playback later.
     _scrollController.dispose();
     super.dispose();
   }
@@ -398,7 +359,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     for (int i = 0; i < items.length; i++)
-                      _buildSentenceWidget(items[i], i, state.isPlaying),
+                      _buildSentenceWidget(items[i], i, _player.current),
                   ],
                 ),
               ),
@@ -430,9 +391,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
   }
 
-  Widget _buildSentenceWidget(_SentenceItem item, int index, bool isPlaying) {
+  Widget _buildSentenceWidget(_SentenceItem item, int index, TtsPlaybackState pstate) {
     final isCurrent = index == _currentSentenceIndex;
     final isPast = index < _currentSentenceIndex;
+    final isPlaying = pstate.isPlaying && isCurrent;
 
     return Container(
       key: _sentenceKeys[index],
@@ -494,12 +456,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                 onTap: () => TtsSettingsSheet.show(
                   context,
                   onChanged: (speed, pitch) {
-                    _tts.setSpeed(speed);
-                    _tts.setPitch(pitch);
+                    _player.setSpeed(speed);
+                    _player.setPitch(pitch);
                     _notifier.setSpeed(speed);
-                    if (state.isPlaying) {
-                      _tts.stop();
-                      _tts.speak(_sentences[_currentSentenceIndex]);
+                    if (_player.current.isPlaying) {
+                      _player.pause();
+                      _player.play();
                     }
                   },
                 ),
@@ -546,7 +508,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   shape: BoxShape.circle,
                 ),
                 child: IconButton(
-                  icon: Icon(state.isPlaying ? Icons.pause : Icons.play_arrow),
+                  icon: Icon(_player.current.isPlaying ? Icons.pause : Icons.play_arrow),
                   iconSize: 36,
                   color: Colors.white,
                   onPressed: _togglePlayPause,
