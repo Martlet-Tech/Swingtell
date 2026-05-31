@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/reader_provider.dart';
 import '../../services/tts/device_tts.dart';
+import '../../services/tts/tts_base.dart';
 import '../../utils/constants.dart';
 
 class ReaderPage extends ConsumerStatefulWidget {
@@ -20,18 +22,23 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   bool _ttsReady = false;
   List<String> _sentences = [];
   int _currentSentenceIndex = 0;
+  StreamSubscription<TtsEvent>? _ttsSubscription;
 
   @override
   void initState() {
     super.initState();
     _initTts();
-    // Load book after a frame to let provider initialize
     Future.microtask(() => ref.read(readerProvider(widget.bookId).notifier).loadBook());
   }
 
   Future<void> _initTts() async {
     try {
       await _tts.init();
+      _ttsSubscription = _tts.events.listen((event) {
+        if (event.type == TtsEventType.completed && mounted) {
+          _onTtsComplete();
+        }
+      });
       if (mounted) setState(() => _ttsReady = true);
     } catch (e) {
       if (mounted) {
@@ -42,53 +49,75 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
   }
 
+  void _onTtsComplete() {
+    final notifier = ref.read(readerProvider(widget.bookId).notifier);
+    if (_currentSentenceIndex < _sentences.length - 1) {
+      setState(() => _currentSentenceIndex++);
+      _tts.speak(_sentences[_currentSentenceIndex]);
+    } else {
+      notifier.stop();
+    }
+  }
+
   void _speak(String text) {
-    if (!_ttsReady) return;
+    if (!_ttsReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('TTS 未就绪'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
     _tts.speak(text);
     ref.read(readerProvider(widget.bookId).notifier).updateCharOffset(text.length);
   }
 
   void _togglePlayPause() {
+    final notifier = ref.read(readerProvider(widget.bookId).notifier);
     final state = ref.read(readerProvider(widget.bookId));
     if (state.isPlaying) {
-      _tts.pause();
+      _tts.stop();
+      notifier.pause();
+    } else if (state.isPaused) {
+      // flutter_tts 4.x has no resume; stop + re-speak
+      if (_currentSentenceIndex < _sentences.length) {
+        _speak(_sentences[_currentSentenceIndex]);
+      }
+      notifier.play();
     } else {
-      if (state.isPaused) {
-        _tts.resume();
-      } else {
-        final content = state.currentContent;
-        if (content.isNotEmpty) {
-          _sentences = _splitSentences(content);
-          _currentSentenceIndex = 0;
-          _speak(_sentences.first);
-        }
+      final content = state.currentContent;
+      if (content.isNotEmpty) {
+        _sentences = _splitSentences(content);
+        _currentSentenceIndex = 0;
+        _speak(_sentences.first);
+        notifier.play();
       }
     }
   }
 
   List<String> _splitSentences(String text) {
     if (text.isEmpty) return [];
-    // Split by Chinese sentence-ending punctuation
     final parts = text.split(RegExp(r'(?<=[。！？\n])'));
     return parts.where((s) => s.trim().isNotEmpty).toList();
   }
 
   void _nextSentence() {
+    final notifier = ref.read(readerProvider(widget.bookId).notifier);
     if (_currentSentenceIndex < _sentences.length - 1) {
-      _currentSentenceIndex++;
+      setState(() => _currentSentenceIndex++);
       _speak(_sentences[_currentSentenceIndex]);
+      notifier.play();
     }
   }
 
   void _prevSentence() {
     if (_currentSentenceIndex > 0) {
-      _currentSentenceIndex--;
+      setState(() => _currentSentenceIndex--);
       _speak(_sentences[_currentSentenceIndex]);
     }
   }
 
   @override
   void dispose() {
+    _ttsSubscription?.cancel();
     _tts.dispose();
     super.dispose();
   }

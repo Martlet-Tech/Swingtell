@@ -158,6 +158,18 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
     state = state.copyWith(speed: speed);
   }
 
+  void play() {
+    state = state.copyWith(isPlaying: true, isPaused: false);
+  }
+
+  void pause() {
+    state = state.copyWith(isPlaying: false, isPaused: true);
+  }
+
+  void stop() {
+    state = state.copyWith(isPlaying: false, isPaused: false);
+  }
+
   void updateCharOffset(int offset) {
     if (state.book == null) return;
     final chapter = state.chapters.isNotEmpty &&
