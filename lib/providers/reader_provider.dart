@@ -7,6 +7,9 @@ import '../services/file_parser/epub_parser.dart';
 import '../services/file_parser/parser_base.dart';
 import '../services/storage/database.dart';
 import '../services/storage/progress_repository.dart';
+import '../services/tts/tts_base.dart';
+import '../services/tts/tts_player.dart';
+import '../services/tts/device_tts.dart';
 import '../utils/app_logger.dart';
 import 'reading_progress_controller.dart';
 
@@ -28,6 +31,10 @@ class ReaderState {
   final bool isPlaying;
   final bool isPaused;
   final double speed;
+  final List<String> sentences;
+  final List<double> sentenceScales;
+  final List<bool> sentenceIsBlockStart;
+  final int currentSentenceIndex;
 
   const ReaderState({
     this.book,
@@ -42,6 +49,10 @@ class ReaderState {
     this.isPlaying = false,
     this.isPaused = false,
     this.speed = 1.0,
+    this.sentences = const [],
+    this.sentenceScales = const [],
+    this.sentenceIsBlockStart = const [],
+    this.currentSentenceIndex = 0,
   });
 
   ReaderState copyWith({
@@ -57,6 +68,10 @@ class ReaderState {
     bool? isPlaying,
     bool? isPaused,
     double? speed,
+    List<String>? sentences,
+    List<double>? sentenceScales,
+    List<bool>? sentenceIsBlockStart,
+    int? currentSentenceIndex,
   }) =>
       ReaderState(
         book: book ?? this.book,
@@ -71,6 +86,10 @@ class ReaderState {
         isPlaying: isPlaying ?? this.isPlaying,
         isPaused: isPaused ?? this.isPaused,
         speed: speed ?? this.speed,
+        sentences: sentences ?? this.sentences,
+        sentenceScales: sentenceScales ?? this.sentenceScales,
+        sentenceIsBlockStart: sentenceIsBlockStart ?? this.sentenceIsBlockStart,
+        currentSentenceIndex: currentSentenceIndex ?? this.currentSentenceIndex,
       );
 }
 
@@ -78,14 +97,105 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   final String bookId;
   final EpubParser _parser = EpubParser();
   final ProgressRepository _repo = ProgressRepository();
+  final TtsPlayer _player = TtsPlayer(DeviceTts());
   ReadingProgressController? _progressController;
   Timer? _progressTimer;
+  StreamSubscription<TtsEvent>? _ttsSub;
+  List<String> _sentences = [];
+  List<double> _sentenceScales = [];
+  List<bool> _sentenceIsBlockStart = [];
+  bool _ttsInited = false;
 
   ReaderNotifier(this.bookId) : super(const ReaderState(isLoading: true));
+
+  // ---------------------------------------------------------------------------
+  // TTS lifecycle
+  // ---------------------------------------------------------------------------
+
+  Future<void> _initTts() async {
+    if (_ttsInited) return;
+    await _player.init(speed: state.speed);
+    _ttsSub = _player.events.listen(_onTtsEvent);
+    _ttsInited = true;
+  }
+
+  void _onTtsEvent(TtsEvent event) {
+    if (event.type == TtsEventType.completed && state.isPlaying) {
+      _advanceToNextSentence();
+    }
+  }
+
+  void _advanceToNextSentence() {
+    final nextIdx = state.currentSentenceIndex + 1;
+    if (nextIdx < _sentences.length) {
+      _player.speak(_sentences[nextIdx]);
+      _syncProgress(nextIdx);
+    } else {
+      // Reached end of chapter
+      _syncProgress(state.currentSentenceIndex);
+      state = state.copyWith(isPlaying: false, isPaused: false);
+      _saveProgressImmediately();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sentence list management
+  // ---------------------------------------------------------------------------
+
+  void _parseSentencesFromBlocks(List<TextBlock> blocks) {
+    _sentences = [];
+    _sentenceScales = [];
+    _sentenceIsBlockStart = [];
+    for (final block in blocks) {
+      final parts = block.text.split(RegExp(r'(?<=[。！？\n])'));
+      for (int i = 0; i < parts.length; i++) {
+        final s = parts[i].trim();
+        if (s.isEmpty) continue;
+        _sentences.add(s);
+        _sentenceScales.add(block.scale);
+        _sentenceIsBlockStart.add(i == 0);
+      }
+    }
+  }
+
+  int _charOffsetToSentenceIndex(int charOffset) {
+    if (charOffset <= 0 || _sentences.isEmpty) return 0;
+    var acc = 0;
+    for (int i = 0; i < _sentences.length; i++) {
+      acc += _sentences[i].length;
+      if (acc > charOffset) return i;
+    }
+    return _sentences.length - 1;
+  }
+
+  int _computeCharOffset(int sentenceIndex) {
+    var offset = 0;
+    for (int i = 0; i < sentenceIndex && i < _sentences.length; i++) {
+      offset += _sentences[i].length;
+    }
+    return offset;
+  }
+
+  void _syncProgress(int sentenceIndex) {
+    final charOffset = _computeCharOffset(sentenceIndex);
+    final totalProgress = _computeTotalProgress(state.currentChapterIndex, charOffset);
+    _progressController?.advance(charOffset, totalProgress);
+    state = state.copyWith(
+      currentSentenceIndex: sentenceIndex,
+      charOffset: charOffset,
+      totalProgress: totalProgress.clamp(0.0, 1.0),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Book / chapter loading
+  // ---------------------------------------------------------------------------
 
   Future<void> loadBook() async {
     state = state.copyWith(isLoading: true, error: null);
     try {
+      await _initTts();
+
       final bookData = await DatabaseService.getBook(bookId);
       if (bookData == null) {
         state = state.copyWith(isLoading: false, error: 'Book not found');
@@ -118,8 +228,8 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
         blocks = await _parser.getChapterBlocks(book.filePath, chapterIndex);
       }
 
-      // Recalculate totalProgress from chapterIndex + charOffset instead of
-      // trusting possibly-corrupt DB value (e.g. from the old _loadChapter bug).
+      _parseSentencesFromBlocks(blocks);
+      final sentenceIndex = _charOffsetToSentenceIndex(charOffset);
       final actualTotalProgress = _computeTotalProgress(chapterIndex, charOffset);
 
       state = ReaderState(
@@ -132,10 +242,14 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
         currentBlocks: blocks,
         isLoading: false,
         speed: state.speed,
+        sentences: List.unmodifiable(_sentences),
+        sentenceScales: List.unmodifiable(_sentenceScales),
+        sentenceIsBlockStart: List.unmodifiable(_sentenceIsBlockStart),
+        currentSentenceIndex: sentenceIndex,
       );
 
       AppLogger.instance.info('Book loaded: ${book.title}, chapter ${chapterIndex + 1}/${chapters.length}, '
-          'charOffset=$charOffset, progressData=${savedProgress != null ? "found" : "none"}');
+          'charOffset=$charOffset, sentenceIdx=$sentenceIndex, progressData=${savedProgress != null ? "found" : "none"}');
       _startProgressTimer();
     } catch (e) {
       AppLogger.instance.error('Book load failed', e);
@@ -145,14 +259,22 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
 
   Future<void> _loadChapter(int index) async {
     if (state.book == null) return;
+    _player.stop();
     final blocks = await _parser.getChapterBlocks(state.book!.filePath, index);
-    final totalProgress = (state.chapters.length > 0) ? index / state.chapters.length : 0.0;
+    _parseSentencesFromBlocks(blocks);
+    final totalProgress = state.chapters.isNotEmpty ? index / state.chapters.length : 0.0;
     state = state.copyWith(
       currentChapterIndex: index,
       charOffset: 0,
       currentContent: blocks.map((b) => b.text).join('\n'),
       currentBlocks: blocks,
       totalProgress: totalProgress,
+      sentences: List.unmodifiable(_sentences),
+      sentenceScales: List.unmodifiable(_sentenceScales),
+      sentenceIsBlockStart: List.unmodifiable(_sentenceIsBlockStart),
+      currentSentenceIndex: 0,
+      isPlaying: false,
+      isPaused: false,
     );
     await _progressController?.seekTo(0, totalProgress);
     AppLogger.instance.info('Chapter loaded: ${index + 1}/${state.chapters.length}');
@@ -173,35 +295,67 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
     await _loadChapter(state.currentChapterIndex - 1);
   }
 
-  void setSpeed(double speed) {
-    state = state.copyWith(speed: speed);
+  // ---------------------------------------------------------------------------
+  // Playback controls
+  // ---------------------------------------------------------------------------
+
+  void togglePlayPause() {
+    if (_sentences.isEmpty) return;
+    if (state.isPlaying) {
+      _player.pause();
+      state = state.copyWith(isPlaying: false, isPaused: true);
+      _saveProgressImmediately();
+    } else {
+      // For both paused and stopped states, speak from current index.
+      // Restarting the sentence on resume is intentional — DeviceTts.resume()
+      // is a no-op, so we always re-speak.
+      _player.speak(_sentences[state.currentSentenceIndex]);
+      state = state.copyWith(isPlaying: true, isPaused: false);
+    }
   }
 
-  void play() {
-    state = state.copyWith(isPlaying: true, isPaused: false);
+  void nextSentence() {
+    if (_sentences.isEmpty || state.currentSentenceIndex >= _sentences.length - 1) return;
+    final nextIdx = state.currentSentenceIndex + 1;
+    _player.stop();
+    _player.speak(_sentences[nextIdx]);
+    _syncProgress(nextIdx);
+  }
+
+  void prevSentence() {
+    if (_sentences.isEmpty || state.currentSentenceIndex <= 0) return;
+    final prevIdx = state.currentSentenceIndex - 1;
+    _player.stop();
+    _player.speak(_sentences[prevIdx]);
+    _syncProgress(prevIdx);
+  }
+
+  void seekToSentence(int index) {
+    if (_sentences.isEmpty || index < 0 || index >= _sentences.length) return;
+    _player.stop();
+    state = state.copyWith(isPlaying: false, isPaused: false);
+    _syncProgress(index);
   }
 
   void pause() {
+    if (!state.isPlaying) return;
+    _player.pause();
     state = state.copyWith(isPlaying: false, isPaused: true);
     _saveProgressImmediately();
   }
 
-  void stop() {
-    state = state.copyWith(isPlaying: false, isPaused: false);
+  Future<void> updateTtsSettings(double speed, double pitch) async {
+    await _player.setSpeed(speed);
+    await _player.setPitch(pitch);
+    state = state.copyWith(speed: speed);
+    if (state.isPlaying) {
+      _player.speak(_sentences[state.currentSentenceIndex]);
+    }
   }
 
-  /// Public save trigger — let the UI layer save after each sentence advance.
-  Future<void> saveProgress() => _saveProgressImmediately();
-
-  void updateCharOffset(int offset) {
-    if (state.book == null) return;
-    final totalProgress = _computeTotalProgress(state.currentChapterIndex, offset);
-    _progressController?.advance(offset, totalProgress);
-    state = state.copyWith(
-      charOffset: offset,
-      totalProgress: totalProgress.clamp(0.0, 1.0),
-    );
-  }
+  // ---------------------------------------------------------------------------
+  // Progress
+  // ---------------------------------------------------------------------------
 
   double _computeTotalProgress(int chapterIndex, int charOffset) {
     final chapter = state.chapters.isNotEmpty && chapterIndex < state.chapters.length
@@ -232,7 +386,10 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   @override
   void dispose() {
     _progressTimer?.cancel();
+    _ttsSub?.cancel();
+    _player.stop();
     _progressController?.dispose();
+    _player.dispose();
     super.dispose();
   }
 }
