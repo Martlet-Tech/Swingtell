@@ -3,10 +3,13 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../providers/reader_provider.dart';
 import '../../services/tts/device_tts.dart';
 import '../../services/tts/tts_base.dart';
+import '../../utils/app_logger.dart';
 import '../../utils/constants.dart';
+import '../settings/tts_settings_sheet.dart';
 
 class ReaderPage extends ConsumerStatefulWidget {
   final String bookId;
@@ -17,30 +20,59 @@ class ReaderPage extends ConsumerStatefulWidget {
   ConsumerState<ReaderPage> createState() => _ReaderPageState();
 }
 
+class _SentenceItem {
+  final String text;
+  final double scale;
+  final bool isBlockStart;
+  const _SentenceItem(this.text, this.scale, this.isBlockStart);
+}
+
 class _ReaderPageState extends ConsumerState<ReaderPage> {
   final DeviceTts _tts = DeviceTts();
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey _scrollViewKey = GlobalKey(debugLabel: 'scrollView');
   bool _ttsReady = false;
   List<String> _sentences = [];
+  List<GlobalKey> _sentenceKeys = [];
   int _currentSentenceIndex = 0;
+  bool _isAutoScrolling = false;
+  bool _needsRestore = true;
   StreamSubscription<TtsEvent>? _ttsSubscription;
+  late final ReaderNotifier _notifier;
 
   @override
   void initState() {
     super.initState();
+    _notifier = ref.read(readerProvider(widget.bookId).notifier);
     _initTts();
-    Future.microtask(() => ref.read(readerProvider(widget.bookId).notifier).loadBook());
+    Future.microtask(() async {
+      await _notifier.loadBook();
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _tryRestore());
+      }
+    });
   }
 
   Future<void> _initTts() async {
     try {
       await _tts.init();
+      final prefs = await SharedPreferences.getInstance();
+      final speed = prefs.getDouble('tts_speed') ?? 1.0;
+      final pitch = prefs.getDouble('tts_pitch') ?? 1.0;
+      await _tts.setSpeed(speed);
+      await _tts.setPitch(pitch);
+      _notifier.setSpeed(speed);
       _ttsSubscription = _tts.events.listen((event) {
         if (event.type == TtsEventType.completed && mounted) {
           _onTtsComplete();
+        } else if (event.type == TtsEventType.error) {
+          AppLogger.instance.error('TTS error: ${event.error ?? "unknown"}');
         }
       });
       if (mounted) setState(() => _ttsReady = true);
+      AppLogger.instance.info('TTS initialized');
     } catch (e) {
+      AppLogger.instance.error('TTS init failed', e);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('TTS 初始化失败: $e'), backgroundColor: Colors.red.shade700),
@@ -50,12 +82,145 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   }
 
   void _onTtsComplete() {
-    final notifier = ref.read(readerProvider(widget.bookId).notifier);
+    final notifier = _notifier;
+    final state = _notifier.state;
+    final oldOffset = state.charOffset;
     if (_currentSentenceIndex < _sentences.length - 1) {
+      final sentLen = _sentences[_currentSentenceIndex].length;
+      notifier.updateCharOffset(oldOffset + sentLen);
+      notifier.saveProgress(); // checkpoint: sentence N done
       setState(() => _currentSentenceIndex++);
+      AppLogger.instance.debug('TTS complete: charOffset ${oldOffset}→${oldOffset + sentLen}, idx ${_currentSentenceIndex - 1}→$_currentSentenceIndex');
+      _scrollToCurrentSentence();
       _tts.speak(_sentences[_currentSentenceIndex]);
     } else {
-      notifier.stop();
+      final sentLen = _sentences[_currentSentenceIndex].length;
+      notifier.updateCharOffset(oldOffset + sentLen);
+      AppLogger.instance.debug('TTS complete (last): charOffset ${oldOffset}→${oldOffset + sentLen}');
+      notifier.pause();
+    }
+  }
+
+  void _scrollToCurrentSentence() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _currentSentenceIndex >= _sentenceKeys.length) return;
+      final ctx = _sentenceKeys[_currentSentenceIndex].currentContext;
+      if (ctx != null) {
+        _isAutoScrolling = true;
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.3,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
+      }
+    });
+  }
+
+  void _pauseTts() {
+    _tts.stop();
+    _notifier.pause();
+    AppLogger.instance.info('TTS paused (user scroll) at sentence $_currentSentenceIndex');
+  }
+
+  bool _onScrollNotification(ScrollNotification notification) {
+    if (_isAutoScrolling) {
+      // Let programmatic scroll finish without triggering user-scroll logic
+      if (notification is ScrollEndNotification) {
+        _isAutoScrolling = false;
+      }
+      return false;
+    }
+
+    if (notification is ScrollStartNotification && notification.dragDetails != null) {
+      final state = _notifier.state;
+      if (state.isPlaying) {
+        _pauseTts();
+      }
+    } else if (notification is ScrollEndNotification && notification.dragDetails != null) {
+      _findNearestVisibleSentence();
+    }
+    return false;
+  }
+
+  void _findNearestVisibleSentence() {
+    if (_sentenceKeys.isEmpty) return;
+
+    final scrollBox = _scrollViewKey.currentContext?.findRenderObject() as RenderBox?;
+    if (scrollBox == null || !scrollBox.hasSize) return;
+
+    final viewportHeight = scrollBox.size.height;
+    final targetY = viewportHeight * 0.35;
+
+    int bestIdx = _currentSentenceIndex;
+    double bestDist = double.infinity;
+
+    for (int i = 0; i < _sentenceKeys.length; i++) {
+      final ctx = _sentenceKeys[i].currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) continue;
+
+      try {
+        final offset = box.localToGlobal(Offset.zero, ancestor: scrollBox);
+        final dist = (offset.dy - targetY).abs();
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    if (bestIdx != _currentSentenceIndex) {
+      setState(() => _currentSentenceIndex = bestIdx);
+      _syncCharOffsetFromIndex();
+    }
+  }
+
+  void _tryRestore() {
+    if (!_needsRestore || _sentences.isEmpty) return;
+    _needsRestore = false;
+    final state = _notifier.state;
+    if (state.charOffset <= 0) return;
+    final targetIdx = _charOffsetToIndex(state.charOffset);
+    if (targetIdx >= _sentenceKeys.length) return;
+    if (_currentSentenceIndex != targetIdx) {
+      setState(() => _currentSentenceIndex = targetIdx);
+    }
+    AppLogger.instance.info('Position restored: charOffset=${state.charOffset} → sentenceIdx=$targetIdx');
+    final ctx = _sentenceKeys[targetIdx].currentContext;
+    if (ctx != null) {
+      _isAutoScrolling = true;
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.3,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
+
+  int _charOffsetToIndex(int charOffset) {
+    if (charOffset <= 0 || _sentences.isEmpty) return 0;
+    var acc = 0;
+    for (int i = 0; i < _sentences.length; i++) {
+      acc += _sentences[i].length;
+      if (acc > charOffset) return i;
+    }
+    return _sentences.length - 1;
+  }
+
+  void _syncCharOffsetFromIndex() {
+    var offset = 0;
+    for (int i = 0; i < _currentSentenceIndex && i < _sentences.length; i++) {
+      offset += _sentences[i].length;
+    }
+    final oldOffset = _notifier.state.charOffset;
+    _notifier.updateCharOffset(offset);
+    if (oldOffset != offset) {
+      AppLogger.instance.debug('Sync charOffset: $oldOffset→$offset (idx=$_currentSentenceIndex)');
     }
   }
 
@@ -67,12 +232,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       return;
     }
     _tts.speak(text);
-    ref.read(readerProvider(widget.bookId).notifier).updateCharOffset(text.length);
+    AppLogger.instance.debug('TTS speak: "${text.length > 30 ? '${text.substring(0, 30)}...' : text}"');
   }
 
   void _togglePlayPause() {
-    final notifier = ref.read(readerProvider(widget.bookId).notifier);
-    final state = ref.read(readerProvider(widget.bookId));
+    final notifier = _notifier;
+    final state = _notifier.state;
     if (state.isPlaying) {
       _tts.stop();
       notifier.pause();
@@ -82,13 +247,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         _speak(_sentences[_currentSentenceIndex]);
       }
       notifier.play();
+      _scrollToCurrentSentence();
     } else {
-      final content = state.currentContent;
-      if (content.isNotEmpty) {
-        _sentences = _splitSentences(content);
-        _currentSentenceIndex = 0;
-        _speak(_sentences.first);
+      if (state.currentBlocks.isNotEmpty) {
+        final items = _buildSentenceItems(state);
+        _syncSentenceData(items);
+        if (_sentences.isEmpty) return;
+        _speak(_sentences[_currentSentenceIndex]);
         notifier.play();
+        _scrollToCurrentSentence();
       }
     }
   }
@@ -100,9 +267,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   }
 
   void _nextSentence() {
-    final notifier = ref.read(readerProvider(widget.bookId).notifier);
+    final notifier = _notifier;
     if (_currentSentenceIndex < _sentences.length - 1) {
       setState(() => _currentSentenceIndex++);
+      _syncCharOffsetFromIndex();
+      _scrollToCurrentSentence();
       _speak(_sentences[_currentSentenceIndex]);
       notifier.play();
     }
@@ -111,14 +280,22 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   void _prevSentence() {
     if (_currentSentenceIndex > 0) {
       setState(() => _currentSentenceIndex--);
+      _syncCharOffsetFromIndex();
+      _scrollToCurrentSentence();
       _speak(_sentences[_currentSentenceIndex]);
     }
   }
 
   @override
   void dispose() {
+    _tts.stop(); // kill TTS engine immediately
+    _syncCharOffsetFromIndex(); // sync position from index before save
+    final saved = _notifier.state;
+    AppLogger.instance.info('Dispose save: chapter=${saved.currentChapterIndex}, charOffset=${saved.charOffset}, idx=$_currentSentenceIndex, totalProgress=${saved.totalProgress}');
+    _notifier.pause(); // save progress
     _ttsSubscription?.cancel();
     _tts.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -138,9 +315,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
             PopupMenuButton<int>(
               tooltip: '章节列表',
               onSelected: (idx) async {
-                await ref.read(readerProvider(widget.bookId).notifier).jumpToChapter(idx);
+                await _notifier.jumpToChapter(idx);
                 setState(() {
                   _sentences = [];
+                  _sentenceKeys = [];
                   _currentSentenceIndex = 0;
                 });
               },
@@ -197,24 +375,36 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       );
     }
 
-    if (_sentences.isEmpty && content.isNotEmpty) {
-      _sentences = _splitSentences(content);
+    final items = _buildSentenceItems(state);
+    _syncSentenceData(items);
+
+    // Set correct index during build so first frame renders with correct colors.
+    // Actual scroll is deferred to _tryRestore via post-frame callback.
+    if (_needsRestore && _sentences.isNotEmpty && state.charOffset > 0) {
+      _currentSentenceIndex = _charOffsetToIndex(state.charOffset);
     }
 
     return Column(
       children: [
-        // Text display area
         Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: SelectableText.rich(
-              _buildStyledText(state),
-              style: const TextStyle(fontSize: _baseFontSize, height: 1.8),
+          child: NotificationListener<ScrollNotification>(
+            onNotification: _onScrollNotification,
+            child: SingleChildScrollView(
+              key: _scrollViewKey,
+              controller: _scrollController,
+              padding: const EdgeInsets.all(20),
+              child: SelectionArea(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (int i = 0; i < items.length; i++)
+                      _buildSentenceWidget(items[i], i, state.isPlaying),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
-
-        // Control bar
         _buildControlBar(state),
       ],
     );
@@ -222,60 +412,48 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
   static const double _baseFontSize = 18.0;
 
-  /// Build rich text by rendering blocks directly with per-block scale,
-  /// aligning sentence indices with TTS for highlighting.
-  TextSpan _buildStyledText(ReaderState state) {
-    if (state.currentBlocks.isEmpty) {
-      if (_sentences.isEmpty) return const TextSpan(text: '');
-      return TextSpan(text: _sentences.join(''));
-    }
-
-    final spans = <InlineSpan>[];
-    var sentIdx = 0; // maps to _currentSentenceIndex
-
-    for (int b = 0; b < state.currentBlocks.length; b++) {
-      final block = state.currentBlocks[b];
-      if (block.text.isEmpty) continue;
-
-      // Blank line between blocks for paragraph spacing
-      if (b > 0) {
-        spans.add(const TextSpan(text: '\n'));
-      }
-
-      // Split the block text into sentences so we can highlight the right one
-      final blockSentences = _splitSentences(block.text);
-
-      if (blockSentences.isEmpty) {
-        // Block with no sentence breaks — render whole block
-        spans.add(TextSpan(
-          text: block.text,
-          style: TextStyle(
-            fontSize: _baseFontSize * block.scale,
-            fontWeight: block.scale > 1.0 ? FontWeight.w600 : null,
-          ),
-        ));
-      } else {
-        for (final sentence in blockSentences) {
-          final isHighlighted = sentIdx == _currentSentenceIndex && state.isPlaying;
-          spans.add(TextSpan(
-            text: sentence,
-            style: TextStyle(
-              fontSize: _baseFontSize * block.scale,
-              fontWeight: block.scale > 1.0 ? FontWeight.w600 : null,
-              backgroundColor: isHighlighted
-                  ? AppConstants.primaryColor.withValues(alpha: 0.3)
-                  : null,
-              color: sentIdx < _currentSentenceIndex
-                  ? Colors.grey.shade600
-                  : (isHighlighted ? AppConstants.accentColor : null),
-            ),
-          ));
-          sentIdx++;
-        }
+  List<_SentenceItem> _buildSentenceItems(ReaderState state) {
+    final items = <_SentenceItem>[];
+    for (final block in state.currentBlocks) {
+      final sentStrs = _splitSentences(block.text);
+      for (int i = 0; i < sentStrs.length; i++) {
+        items.add(_SentenceItem(sentStrs[i], block.scale, i == 0));
       }
     }
+    return items;
+  }
 
-    return TextSpan(children: spans);
+  void _syncSentenceData(List<_SentenceItem> items) {
+    if (_sentenceKeys.length != items.length) {
+      _sentenceKeys = List.generate(items.length, (_) => GlobalKey(debugLabel: 'sent'));
+      _sentences = items.map((e) => e.text).toList();
+    }
+  }
+
+  Widget _buildSentenceWidget(_SentenceItem item, int index, bool isPlaying) {
+    final isCurrent = index == _currentSentenceIndex;
+    final isPast = index < _currentSentenceIndex;
+
+    return Container(
+      key: _sentenceKeys[index],
+      margin: item.isBlockStart && index > 0
+          ? const EdgeInsets.only(top: 20)
+          : null,
+      child: Text(
+        item.text,
+        style: TextStyle(
+          fontSize: _baseFontSize * item.scale,
+          fontWeight: item.scale > 1.0 ? FontWeight.w600 : null,
+          height: 1.8,
+          backgroundColor: isCurrent && isPlaying
+              ? AppConstants.primaryColor.withValues(alpha: 0.3)
+              : null,
+          color: isPast
+              ? Colors.grey.shade600
+              : (isCurrent && isPlaying ? AppConstants.accentColor : null),
+        ),
+      ),
+    );
   }
 
   Widget _buildControlBar(ReaderState state) {
@@ -313,14 +491,18 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
               Text('${(state.totalProgress * 100).toInt()}%',
                   style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
               GestureDetector(
-                onTap: () {
-                  final speeds = AppConstants.presetSpeeds;
-                  final currentIdx = speeds.indexOf(state.speed);
-                  final nextIdx = (currentIdx + 1) % speeds.length;
-                  final newSpeed = speeds[nextIdx];
-                  _tts.setSpeed(newSpeed);
-                  ref.read(readerProvider(widget.bookId).notifier).setSpeed(newSpeed);
-                },
+                onTap: () => TtsSettingsSheet.show(
+                  context,
+                  onChanged: (speed, pitch) {
+                    _tts.setSpeed(speed);
+                    _tts.setPitch(pitch);
+                    _notifier.setSpeed(speed);
+                    if (state.isPlaying) {
+                      _tts.stop();
+                      _tts.speak(_sentences[_currentSentenceIndex]);
+                    }
+                  },
+                ),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
@@ -342,10 +524,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                 icon: const Icon(Icons.skip_previous),
                 iconSize: 28,
                 onPressed: () {
-                  ref.read(readerProvider(widget.bookId).notifier).prevChapter();
+                  _notifier.prevChapter();
                   setState(() {
                     _sentences = [];
+                    _sentenceKeys = [];
                     _currentSentenceIndex = 0;
+                    _needsRestore = false;
                   });
                 },
               ),
@@ -379,10 +563,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                 icon: const Icon(Icons.skip_next),
                 iconSize: 28,
                 onPressed: () {
-                  ref.read(readerProvider(widget.bookId).notifier).nextChapter();
+                  _notifier.nextChapter();
                   setState(() {
                     _sentences = [];
+                    _sentenceKeys = [];
                     _currentSentenceIndex = 0;
+                    _needsRestore = false;
                   });
                 },
               ),

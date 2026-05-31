@@ -91,6 +91,11 @@ class NativeTts implements TtsEngine {
   }
 
   @override
+  Future<void> setPitch(double pitch) async {
+    await _channel.invokeMethod('setPitch', <String, dynamic>{'pitch': pitch});
+  }
+
+  @override
   Future<void> setVoice(String voiceId) async {
     await _channel.invokeMethod('setLanguage', <String, dynamic>{'language': voiceId});
   }
@@ -103,6 +108,11 @@ class NativeTts implements TtsEngine {
 
   @override
   bool get isPaused => _isPaused;
+
+  @override
+  Future<void> openSystemSettings() async {
+    await _channel.invokeMethod('openTtsSettings');
+  }
 
   @override
   Future<void> dispose() async {

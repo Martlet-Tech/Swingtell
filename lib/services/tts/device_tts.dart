@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'native_tts.dart';
 import 'tts_base.dart';
@@ -127,6 +128,15 @@ class DeviceTts implements TtsEngine {
   }
 
   @override
+  Future<void> setPitch(double pitch) async {
+    if (_fallback != null) {
+      await _fallback!.setPitch(pitch);
+    } else {
+      await _tts.setPitch(pitch);
+    }
+  }
+
+  @override
   Future<void> setVoice(String voiceId) async {
     if (_fallback != null) {
       await _fallback!.setVoice(voiceId);
@@ -143,6 +153,15 @@ class DeviceTts implements TtsEngine {
 
   @override
   bool get isPaused => _isPaused;
+
+  @override
+  Future<void> openSystemSettings() async {
+    if (_fallback != null) {
+      await _fallback!.openSystemSettings();
+    } else {
+      await const MethodChannel('swingtell_tts').invokeMethod('openTtsSettings');
+    }
+  }
 
   @override
   Future<void> dispose() async {

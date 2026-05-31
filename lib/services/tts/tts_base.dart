@@ -17,7 +17,9 @@ abstract class TtsEngine {
   Future<void> resume();
   Future<void> stop();
   Future<void> setSpeed(double speed);
+  Future<void> setPitch(double pitch);
   Future<void> setVoice(String voiceId);
+  Future<void> openSystemSettings();
   Stream<TtsEvent> get events;
   bool get isPlaying;
   bool get isPaused;

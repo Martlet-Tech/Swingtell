@@ -5,7 +5,7 @@ class AppConstants {
 
   // App info
   static const String appName = 'SwingTell';
-  static const String appVersion = '1.0.0';
+  static const String appVersion = '0.2.7';
 
   // TTS
   static const double minSpeed = 0.5;
