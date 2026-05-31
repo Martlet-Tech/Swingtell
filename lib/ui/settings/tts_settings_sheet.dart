@@ -40,8 +40,8 @@ class _TtsSettingsSheetState extends ConsumerState<TtsSettingsSheet> {
 
   Future<void> _load() async {
     final settings = ref.read(settingsServiceProvider);
-    final speed = await settings.getSpeed();
-    final pitch = await settings.getPitch();
+    final speed = double.parse((await settings.getSpeed()).toStringAsFixed(1));
+    final pitch = double.parse((await settings.getPitch()).toStringAsFixed(1));
     if (mounted) {
       setState(() {
         _speed = speed;
@@ -51,6 +51,7 @@ class _TtsSettingsSheetState extends ConsumerState<TtsSettingsSheet> {
   }
 
   Future<void> _saveSpeed(double v) async {
+    v = double.parse(v.toStringAsFixed(1));
     final settings = ref.read(settingsServiceProvider);
     await settings.setSpeed(v);
     if (mounted) setState(() => _speed = v);
@@ -58,6 +59,7 @@ class _TtsSettingsSheetState extends ConsumerState<TtsSettingsSheet> {
   }
 
   Future<void> _savePitch(double v) async {
+    v = double.parse(v.toStringAsFixed(1));
     final settings = ref.read(settingsServiceProvider);
     await settings.setPitch(v);
     if (mounted) setState(() => _pitch = v);
@@ -150,12 +152,24 @@ class _TtsSettingsSheetState extends ConsumerState<TtsSettingsSheet> {
     required String displayValue,
     required ValueChanged<double> onChanged,
   }) {
+    final step = (max - min) / divisions;
     return Row(
       children: [
         Icon(icon, size: 20, color: Colors.grey.shade400),
         const SizedBox(width: 12),
         Text(label, style: TextStyle(color: Colors.grey.shade300, fontSize: 14)),
-        const SizedBox(width: 8),
+        const SizedBox(width: 4),
+        IconButton(
+          icon: const Icon(Icons.remove_circle_outline),
+          iconSize: 18,
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          color: Colors.grey.shade400,
+          onPressed: value > min
+              ? () => onChanged((value - step).clamp(min, max))
+              : null,
+        ),
         Expanded(
           child: Slider(
             value: value,
@@ -164,6 +178,17 @@ class _TtsSettingsSheetState extends ConsumerState<TtsSettingsSheet> {
             divisions: divisions,
             onChanged: onChanged,
           ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.add_circle_outline),
+          iconSize: 18,
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          color: Colors.grey.shade400,
+          onPressed: value < max
+              ? () => onChanged((value + step).clamp(min, max))
+              : null,
         ),
         SizedBox(width: 44, child: Text(displayValue, style: TextStyle(color: Colors.grey.shade400, fontSize: 13))),
       ],
