@@ -11,6 +11,7 @@ import '../../services/file_parser/epub_parser.dart';
 import '../../services/storage/database.dart';
 import '../../utils/constants.dart';
 import '../reader/reader_page.dart';
+import '../settings/settings_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -163,7 +164,17 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('SwingTell')),
+      appBar: AppBar(
+        title: const Text('SwingTell'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SettingsPage()),
+            ),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openEpub,
         icon: const Icon(Icons.add),
