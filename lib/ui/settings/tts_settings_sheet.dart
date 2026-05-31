@@ -1,14 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
-const _prefsKeySpeed = 'tts_speed';
-const _prefsKeyPitch = 'tts_pitch';
-const _prefsKeyEngine = 'tts_engine';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../providers/settings_provider.dart';
 
 enum TtsEngineType { system, ai, premium }
 
-class TtsSettingsSheet extends StatefulWidget {
+class TtsSettingsSheet extends ConsumerStatefulWidget {
   /// Called immediately when speed or pitch changes, so the reader can apply.
   final void Function(double speed, double pitch)? onChanged;
 
@@ -27,10 +24,10 @@ class TtsSettingsSheet extends StatefulWidget {
   }
 
   @override
-  State<TtsSettingsSheet> createState() => _TtsSettingsSheetState();
+  ConsumerState<TtsSettingsSheet> createState() => _TtsSettingsSheetState();
 }
 
-class _TtsSettingsSheetState extends State<TtsSettingsSheet> {
+class _TtsSettingsSheetState extends ConsumerState<TtsSettingsSheet> {
   double _speed = 1.0;
   double _pitch = 1.0;
   TtsEngineType _engine = TtsEngineType.system;
@@ -42,37 +39,27 @@ class _TtsSettingsSheetState extends State<TtsSettingsSheet> {
   }
 
   Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
+    final settings = ref.read(settingsServiceProvider);
+    final speed = await settings.getSpeed();
+    final pitch = await settings.getPitch();
     if (mounted) {
       setState(() {
-        _speed = prefs.getDouble(_prefsKeySpeed) ?? 1.0;
-        _pitch = prefs.getDouble(_prefsKeyPitch) ?? 1.0;
-        _engine = _parseEngine(prefs.getString(_prefsKeyEngine));
+        _speed = speed;
+        _pitch = pitch;
       });
     }
   }
 
-  TtsEngineType _parseEngine(String? s) {
-    switch (s) {
-      case 'ai':
-        return TtsEngineType.ai;
-      case 'premium':
-        return TtsEngineType.premium;
-      default:
-        return TtsEngineType.system;
-    }
-  }
-
   Future<void> _saveSpeed(double v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_prefsKeySpeed, v);
+    final settings = ref.read(settingsServiceProvider);
+    await settings.setSpeed(v);
     if (mounted) setState(() => _speed = v);
     widget.onChanged?.call(v, _pitch);
   }
 
   Future<void> _savePitch(double v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_prefsKeyPitch, v);
+    final settings = ref.read(settingsServiceProvider);
+    await settings.setPitch(v);
     if (mounted) setState(() => _pitch = v);
     widget.onChanged?.call(_speed, v);
   }

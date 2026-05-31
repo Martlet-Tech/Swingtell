@@ -312,25 +312,40 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
             max: 1.0,
           ),
 
-          // Time + speed
+          // Time + speed + auto-next
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('${(state.totalProgress * 100).toInt()}%',
                   style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
-              GestureDetector(
-                onTap: () => TtsSettingsSheet.show(
-                  context,
-                  onChanged: (speed, pitch) => _notifier.updateTtsSettings(speed, pitch),
-                ),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade600),
-                    borderRadius: BorderRadius.circular(4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('连播', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                  SizedBox(
+                    height: 24,
+                    child: Switch(
+                      value: state.autoNextChapter,
+                      onChanged: (v) => _notifier.setAutoNextChapter(v),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                   ),
-                  child: Text('${state.speed}x', style: TextStyle(color: Colors.grey.shade400, fontSize: 13)),
-                ),
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: () => TtsSettingsSheet.show(
+                      context,
+                      onChanged: (speed, pitch) => _notifier.updateTtsSettings(speed, pitch),
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade600),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text('${state.speed}x', style: TextStyle(color: Colors.grey.shade400, fontSize: 13)),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

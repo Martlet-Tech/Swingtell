@@ -10,12 +10,14 @@ import '../services/storage/progress_repository.dart';
 import '../services/tts/tts_base.dart';
 import '../services/tts/tts_player.dart';
 import '../services/tts/device_tts.dart';
+import '../services/storage/settings_service.dart';
 import '../utils/app_logger.dart';
 import 'reading_progress_controller.dart';
+import 'settings_provider.dart';
 
 final readerProvider =
     StateNotifierProvider.family<ReaderNotifier, ReaderState, String>(
-  (ref, bookId) => ReaderNotifier(bookId),
+  (ref, bookId) => ReaderNotifier(bookId, ref),
 );
 
 class ReaderState {
@@ -35,6 +37,7 @@ class ReaderState {
   final List<double> sentenceScales;
   final List<bool> sentenceIsBlockStart;
   final int currentSentenceIndex;
+  final bool autoNextChapter;
 
   const ReaderState({
     this.book,
@@ -53,6 +56,7 @@ class ReaderState {
     this.sentenceScales = const [],
     this.sentenceIsBlockStart = const [],
     this.currentSentenceIndex = 0,
+    this.autoNextChapter = false,
   });
 
   ReaderState copyWith({
@@ -72,6 +76,7 @@ class ReaderState {
     List<double>? sentenceScales,
     List<bool>? sentenceIsBlockStart,
     int? currentSentenceIndex,
+    bool? autoNextChapter,
   }) =>
       ReaderState(
         book: book ?? this.book,
@@ -90,11 +95,13 @@ class ReaderState {
         sentenceScales: sentenceScales ?? this.sentenceScales,
         sentenceIsBlockStart: sentenceIsBlockStart ?? this.sentenceIsBlockStart,
         currentSentenceIndex: currentSentenceIndex ?? this.currentSentenceIndex,
+        autoNextChapter: autoNextChapter ?? this.autoNextChapter,
       );
 }
 
 class ReaderNotifier extends StateNotifier<ReaderState> {
   final String bookId;
+  final Ref _ref;
   final EpubParser _parser = EpubParser();
   final ProgressRepository _repo = ProgressRepository();
   final TtsPlayer _player = TtsPlayer(DeviceTts());
@@ -106,7 +113,9 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   List<bool> _sentenceIsBlockStart = [];
   bool _ttsInited = false;
 
-  ReaderNotifier(this.bookId) : super(const ReaderState(isLoading: true));
+  SettingsService get _settings => _ref.read(settingsServiceProvider);
+
+  ReaderNotifier(this.bookId, this._ref) : super(const ReaderState(isLoading: true));
 
   // ---------------------------------------------------------------------------
   // TTS lifecycle
@@ -114,7 +123,8 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
 
   Future<void> _initTts() async {
     if (_ttsInited) return;
-    await _player.init(speed: state.speed);
+    final pitch = await _settings.getPitch();
+    await _player.init(speed: state.speed, pitch: pitch);
     _ttsSub = _player.events.listen(_onTtsEvent);
     _ttsInited = true;
   }
@@ -133,8 +143,26 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
     } else {
       // Reached end of chapter
       _syncProgress(state.currentSentenceIndex);
-      state = state.copyWith(isPlaying: false, isPaused: false);
       _saveProgressImmediately();
+      _checkAutoNextChapter();
+    }
+  }
+
+  void _checkAutoNextChapter() {
+    if (!state.autoNextChapter ||
+        state.currentChapterIndex >= state.chapters.length - 1) {
+      state = state.copyWith(isPlaying: false, isPaused: false);
+      return;
+    }
+    _performAutoNextChapter();
+  }
+
+  Future<void> _performAutoNextChapter() async {
+    final nextIdx = state.currentChapterIndex + 1;
+    await _loadChapter(nextIdx);
+    if (_sentences.isNotEmpty) {
+      _player.speak(_sentences[0]);
+      state = state.copyWith(isPlaying: true, isPaused: false);
     }
   }
 
@@ -194,6 +222,11 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   Future<void> loadBook() async {
     state = state.copyWith(isLoading: true, error: null);
     try {
+      // Restore persistent settings before TTS init
+      final savedSpeed = await _settings.getSpeed();
+      final autoNext = await _settings.getAutoNextChapter();
+      state = state.copyWith(speed: savedSpeed, autoNextChapter: autoNext);
+
       await _initTts();
 
       final bookData = await DatabaseService.getBook(bookId);
@@ -246,6 +279,7 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
         sentenceScales: List.unmodifiable(_sentenceScales),
         sentenceIsBlockStart: List.unmodifiable(_sentenceIsBlockStart),
         currentSentenceIndex: sentenceIndex,
+        autoNextChapter: autoNext,
       );
 
       AppLogger.instance.info('Book loaded: ${book.title}, chapter ${chapterIndex + 1}/${chapters.length}, '
@@ -345,12 +379,21 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   }
 
   Future<void> updateTtsSettings(double speed, double pitch) async {
-    await _player.setSpeed(speed);
-    await _player.setPitch(pitch);
+    await Future.wait([
+      _player.setSpeed(speed),
+      _player.setPitch(pitch),
+      _settings.setSpeed(speed),
+      _settings.setPitch(pitch),
+    ]);
     state = state.copyWith(speed: speed);
     if (state.isPlaying) {
       _player.speak(_sentences[state.currentSentenceIndex]);
     }
+  }
+
+  Future<void> setAutoNextChapter(bool value) async {
+    await _settings.setAutoNextChapter(value);
+    state = state.copyWith(autoNextChapter: value);
   }
 
   // ---------------------------------------------------------------------------
