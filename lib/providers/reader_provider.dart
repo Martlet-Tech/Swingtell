@@ -6,6 +6,9 @@ import '../models/reading_progress.dart';
 import '../services/file_parser/epub_parser.dart';
 import '../services/file_parser/parser_base.dart';
 import '../services/storage/database.dart';
+import '../services/storage/progress_repository.dart';
+import '../utils/app_logger.dart';
+import 'reading_progress_controller.dart';
 
 final readerProvider =
     StateNotifierProvider.family<ReaderNotifier, ReaderState, String>(
@@ -74,6 +77,8 @@ class ReaderState {
 class ReaderNotifier extends StateNotifier<ReaderState> {
   final String bookId;
   final EpubParser _parser = EpubParser();
+  final ProgressRepository _repo = ProgressRepository();
+  ReadingProgressController? _progressController;
   Timer? _progressTimer;
 
   ReaderNotifier(this.bookId) : super(const ReaderState(isLoading: true));
@@ -91,36 +96,49 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
       final chapterData = await DatabaseService.getChapters(bookId);
       final chapters = chapterData.map((m) => Chapter.fromMap(m)).toList();
 
-      final progressData = await DatabaseService.getProgress(bookId);
-      int chapterIndex = 0;
-      int charOffset = 0;
-      if (progressData != null) {
-        final prog = ReadingProgress.fromMap(progressData);
-        chapterIndex = prog.chapterIndex;
-        charOffset = prog.charOffset;
-      }
+      final savedProgress = await _repo.load(bookId);
+      final initialProgress = savedProgress ?? ReadingProgress(
+        bookId: bookId,
+        chapterIndex: 0,
+        charOffset: 0,
+        totalProgress: 0.0,
+        lastReadAt: DateTime.now(),
+      );
+
+      _progressController = ReadingProgressController(
+        repo: _repo,
+        initial: initialProgress,
+      );
+
+      final chapterIndex = initialProgress.chapterIndex;
+      final charOffset = initialProgress.charOffset;
 
       List<TextBlock> blocks = [];
       if (chapters.isNotEmpty && chapterIndex < chapters.length) {
         blocks = await _parser.getChapterBlocks(book.filePath, chapterIndex);
       }
 
+      // Recalculate totalProgress from chapterIndex + charOffset instead of
+      // trusting possibly-corrupt DB value (e.g. from the old _loadChapter bug).
+      final actualTotalProgress = _computeTotalProgress(chapterIndex, charOffset);
+
       state = ReaderState(
         book: book,
         chapters: chapters,
         currentChapterIndex: chapterIndex,
         charOffset: charOffset,
-        totalProgress: progressData != null
-            ? (progressData['total_progress'] as num).toDouble()
-            : 0.0,
+        totalProgress: actualTotalProgress,
         currentContent: blocks.map((b) => b.text).join('\n'),
         currentBlocks: blocks,
         isLoading: false,
         speed: state.speed,
       );
 
+      AppLogger.instance.info('Book loaded: ${book.title}, chapter ${chapterIndex + 1}/${chapters.length}, '
+          'charOffset=$charOffset, progressData=${savedProgress != null ? "found" : "none"}');
       _startProgressTimer();
     } catch (e) {
+      AppLogger.instance.error('Book load failed', e);
       state = state.copyWith(isLoading: false, error: e.toString());
     }
   }
@@ -128,15 +146,16 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   Future<void> _loadChapter(int index) async {
     if (state.book == null) return;
     final blocks = await _parser.getChapterBlocks(state.book!.filePath, index);
-    final total = state.chapters.length;
+    final totalProgress = (state.chapters.length > 0) ? index / state.chapters.length : 0.0;
     state = state.copyWith(
       currentChapterIndex: index,
       charOffset: 0,
       currentContent: blocks.map((b) => b.text).join('\n'),
       currentBlocks: blocks,
-      totalProgress: total / (total > 0 ? total : 1),
+      totalProgress: totalProgress,
     );
-    _saveProgressImmediately();
+    await _progressController?.seekTo(0, totalProgress);
+    AppLogger.instance.info('Chapter loaded: ${index + 1}/${state.chapters.length}');
   }
 
   Future<void> jumpToChapter(int index) async {
@@ -164,28 +183,34 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
 
   void pause() {
     state = state.copyWith(isPlaying: false, isPaused: true);
+    _saveProgressImmediately();
   }
 
   void stop() {
     state = state.copyWith(isPlaying: false, isPaused: false);
   }
 
+  /// Public save trigger — let the UI layer save after each sentence advance.
+  Future<void> saveProgress() => _saveProgressImmediately();
+
   void updateCharOffset(int offset) {
     if (state.book == null) return;
-    final chapter = state.chapters.isNotEmpty &&
-            state.currentChapterIndex < state.chapters.length
-        ? state.chapters[state.currentChapterIndex]
-        : null;
-    final totalChars = chapter?.charCount ?? 1;
-    final chapterProgress = offset / totalChars;
-    final total = state.chapters.length;
-    final overall =
-        (state.currentChapterIndex + chapterProgress) / (total > 0 ? total : 1);
-
+    final totalProgress = _computeTotalProgress(state.currentChapterIndex, offset);
+    _progressController?.advance(offset, totalProgress);
     state = state.copyWith(
       charOffset: offset,
-      totalProgress: overall.clamp(0.0, 1.0),
+      totalProgress: totalProgress.clamp(0.0, 1.0),
     );
+  }
+
+  double _computeTotalProgress(int chapterIndex, int charOffset) {
+    final chapter = state.chapters.isNotEmpty && chapterIndex < state.chapters.length
+        ? state.chapters[chapterIndex]
+        : null;
+    final totalChars = chapter?.charCount ?? 1;
+    final chapterProgress = totalChars > 0 ? charOffset / totalChars : 0.0;
+    final total = state.chapters.length;
+    return ((chapterIndex + chapterProgress) / (total > 0 ? total : 1)).clamp(0.0, 1.0);
   }
 
   void _startProgressTimer() {
@@ -196,21 +221,18 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   }
 
   Future<void> _saveProgressImmediately() async {
-    if (state.book == null) return;
-    await DatabaseService.saveProgress(ReadingProgress(
-      bookId: bookId,
-      chapterIndex: state.currentChapterIndex,
-      charOffset: state.charOffset,
-      totalProgress: state.totalProgress,
-      lastReadAt: DateTime.now(),
-      totalReadingSeconds: 0,
-    ).toMap());
+    if (state.book == null || _progressController == null) return;
+    try {
+      await _progressController!.persist();
+    } catch (e) {
+      AppLogger.instance.error('Progress save failed', e);
+    }
   }
 
   @override
   void dispose() {
     _progressTimer?.cancel();
-    _saveProgressImmediately();
+    _progressController?.dispose();
     super.dispose();
   }
 }
