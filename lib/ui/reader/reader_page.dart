@@ -171,6 +171,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   _sentenceKeys = [];
                   _lastScrolledIndex = -1;
                 });
+                _scrollToSentence(0);
               },
               itemBuilder: (_) => state.chapters.map((ch) {
                 final isCurrent = ch.index == state.currentChapterIndex;
@@ -342,13 +343,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
               IconButton(
                 icon: const Icon(Icons.skip_previous),
                 iconSize: 28,
-                onPressed: () {
-                  _notifier.prevChapter();
+                onPressed: () async {
+                  await _notifier.prevChapter();
                   setState(() {
                     _sentenceKeys = [];
                     _lastScrolledIndex = -1;
-                    _needsRestore = false;
                   });
+                  _scrollToSentence(0);
                 },
               ),
               const SizedBox(width: 8),
@@ -380,13 +381,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
               IconButton(
                 icon: const Icon(Icons.skip_next),
                 iconSize: 28,
-                onPressed: () {
-                  _notifier.nextChapter();
+                onPressed: () async {
+                  await _notifier.nextChapter();
                   setState(() {
                     _sentenceKeys = [];
                     _lastScrolledIndex = -1;
-                    _needsRestore = false;
                   });
+                  _scrollToSentence(0);
                 },
               ),
             ],
