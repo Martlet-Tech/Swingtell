@@ -1,19 +1,20 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../data/repositories/book_repository.dart';
+import '../data/repositories/chapter_repository.dart';
+import '../data/repositories/progress_repository.dart';
+import '../data/repositories/settings_repository.dart';
 import '../models/book.dart';
 import '../models/chapter.dart';
 import '../models/reading_progress.dart';
 import '../services/file_parser/epub_parser.dart';
 import '../services/file_parser/parser_base.dart';
-import '../services/storage/database.dart';
-import '../services/storage/progress_repository.dart';
 import '../services/tts/tts_base.dart';
 import '../services/tts/tts_player.dart';
 import '../services/tts/device_tts.dart';
-import '../services/storage/settings_service.dart';
 import '../utils/app_logger.dart';
 import 'reading_progress_controller.dart';
-import 'settings_provider.dart';
+import 'repository_providers.dart';
 
 final readerProvider =
     StateNotifierProvider.family<ReaderNotifier, ReaderState, String>(
@@ -103,7 +104,10 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   final String bookId;
   final Ref _ref;
   final EpubParser _parser = EpubParser();
-  final ProgressRepository _repo = ProgressRepository();
+  late final ProgressRepository _progressRepo;
+  late final BookRepository _bookRepo;
+  late final ChapterRepository _chapterRepo;
+  late final SettingsRepository _settingsRepo;
   final TtsPlayer _player = TtsPlayer(DeviceTts());
   ReadingProgressController? _progressController;
   Timer? _progressTimer;
@@ -113,9 +117,12 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   List<bool> _sentenceIsBlockStart = [];
   bool _ttsInited = false;
 
-  SettingsService get _settings => _ref.read(settingsServiceProvider);
-
-  ReaderNotifier(this.bookId, this._ref) : super(const ReaderState(isLoading: true));
+  ReaderNotifier(this.bookId, this._ref) : super(const ReaderState(isLoading: true)) {
+    _progressRepo = _ref.read(progressRepositoryProvider);
+    _bookRepo = _ref.read(bookRepositoryProvider);
+    _chapterRepo = _ref.read(chapterRepositoryProvider);
+    _settingsRepo = _ref.read(settingsRepositoryProvider);
+  }
 
   // ---------------------------------------------------------------------------
   // TTS lifecycle
@@ -123,7 +130,7 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
 
   Future<void> _initTts() async {
     if (_ttsInited) return;
-    final pitch = await _settings.getPitch();
+    final pitch = await _settingsRepo.getPitch();
     await _player.init(speed: state.speed, pitch: pitch);
     _ttsSub = _player.events.listen(_onTtsEvent);
     _ttsInited = true;
@@ -223,23 +230,21 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
     state = state.copyWith(isLoading: true, error: null);
     try {
       // Restore persistent settings before TTS init
-      final savedSpeed = await _settings.getSpeed();
-      final autoNext = await _settings.getAutoNextChapter();
+      final savedSpeed = await _settingsRepo.getSpeed();
+      final autoNext = await _settingsRepo.getAutoNextChapter();
       state = state.copyWith(speed: savedSpeed, autoNextChapter: autoNext);
 
       await _initTts();
 
-      final bookData = await DatabaseService.getBook(bookId);
-      if (bookData == null) {
+      final book = await _bookRepo.getById(bookId);
+      if (book == null) {
         state = state.copyWith(isLoading: false, error: 'Book not found');
         return;
       }
-      final book = Book.fromMap(bookData);
 
-      final chapterData = await DatabaseService.getChapters(bookId);
-      final chapters = chapterData.map((m) => Chapter.fromMap(m)).toList();
+      final chapters = await _chapterRepo.getByBookId(bookId);
 
-      final savedProgress = await _repo.load(bookId);
+      final savedProgress = await _progressRepo.load(bookId);
       final initialProgress = savedProgress ?? ReadingProgress(
         bookId: bookId,
         chapterIndex: 0,
@@ -249,7 +254,7 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
       );
 
       _progressController = ReadingProgressController(
-        repo: _repo,
+        repo: _progressRepo,
         initial: initialProgress,
       );
 
@@ -340,9 +345,6 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
       state = state.copyWith(isPlaying: false, isPaused: true);
       _saveProgressImmediately();
     } else {
-      // For both paused and stopped states, speak from current index.
-      // Restarting the sentence on resume is intentional — DeviceTts.resume()
-      // is a no-op, so we always re-speak.
       _player.speak(_sentences[state.currentSentenceIndex]);
       state = state.copyWith(isPlaying: true, isPaused: false);
     }
@@ -382,8 +384,8 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
     await Future.wait([
       _player.setSpeed(speed),
       _player.setPitch(pitch),
-      _settings.setSpeed(speed),
-      _settings.setPitch(pitch),
+      _settingsRepo.setSpeed(speed),
+      _settingsRepo.setPitch(pitch),
     ]);
     state = state.copyWith(speed: speed);
     if (state.isPlaying) {
@@ -392,12 +394,11 @@ class ReaderNotifier extends StateNotifier<ReaderState> {
   }
 
   Future<void> setAutoNextChapter(bool value) async {
-    await _settings.setAutoNextChapter(value);
+    await _settingsRepo.setAutoNextChapter(value);
     state = state.copyWith(autoNextChapter: value);
   }
 
   /// Persist current reading position immediately.
-  /// Called from ReaderPage.dispose() so progress is saved on navigation away.
   Future<void> persistProgress() async {
     if (state.book == null || _progressController == null) return;
     final charOffset = _computeCharOffset(state.currentSentenceIndex);

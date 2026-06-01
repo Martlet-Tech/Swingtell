@@ -2,38 +2,46 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
+import '../../data/repositories/book_repository.dart';
+import '../../data/repositories/chapter_repository.dart';
 import '../../models/book.dart';
 import '../../models/chapter.dart';
+import '../../providers/repository_providers.dart';
 import '../../services/file_parser/epub_parser.dart';
-import '../../services/storage/database.dart';
 import '../../utils/constants.dart';
 import '../reader/reader_page.dart';
 import '../settings/settings_page.dart';
 
-class HomePage extends StatefulWidget {
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends ConsumerState<HomePage> {
   List<Map<String, dynamic>> _recentBooks = [];
   bool _isLoading = true;
+
+  late final BookRepository _bookRepo;
+  late final ChapterRepository _chapterRepo;
 
   @override
   void initState() {
     super.initState();
+    _bookRepo = ref.read(bookRepositoryProvider);
+    _chapterRepo = ref.read(chapterRepositoryProvider);
     _loadRecentBooks();
   }
 
   Future<void> _loadRecentBooks() async {
     setState(() => _isLoading = true);
     try {
-      final books = await DatabaseService.getRecentBooks();
+      final books = await _bookRepo.getRecentBooks();
       if (mounted) setState(() => _recentBooks = books);
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -51,10 +59,10 @@ class _HomePageState extends State<HomePage> {
     final file = result.files.single;
     final originalPath = file.path!;
 
-    // Check if already imported (by original path; for SAF URIs we skip dup check)
-    final existing = await DatabaseService.getBookByPath(originalPath);
+    // Check if already imported
+    final existing = await _bookRepo.getByPath(originalPath);
     if (existing != null) {
-      _openReader(existing['id'] as String);
+      _openReader(existing.id);
       return;
     }
 
@@ -105,10 +113,10 @@ class _HomePageState extends State<HomePage> {
         updatedAt: now,
       );
 
-      await DatabaseService.insertBook(book.toMap());
+      await _bookRepo.save(book);
 
       // Insert chapters with bookId
-      final chapterMaps = chapters
+      final chapterList = chapters
           .map((ch) => Chapter(
                 id: const Uuid().v4(),
                 bookId: bookId,
@@ -117,9 +125,9 @@ class _HomePageState extends State<HomePage> {
                 startPos: ch.startPos,
                 endPos: ch.endPos,
                 charCount: ch.charCount,
-              ).toMap())
+              ))
           .toList();
-      await DatabaseService.insertChapters(chapterMaps);
+      await _chapterRepo.saveAll(chapterList);
 
       await _loadRecentBooks();
       // Dismiss import snackbar
@@ -157,7 +165,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _deleteBook(String id) async {
-    await DatabaseService.deleteBook(id);
+    await _bookRepo.delete(id);
     await _loadRecentBooks();
   }
 

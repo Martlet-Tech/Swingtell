@@ -1,6 +1,6 @@
 import 'dart:async';
 import '../../models/reading_progress.dart';
-import '../services/storage/progress_repository.dart';
+import '../data/repositories/progress_repository.dart';
 
 /// Single owner of reading progress state.
 ///

@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../services/storage/settings_service.dart';
+import '../data/repositories/settings_repository.dart';
 
-/// Singleton [SettingsService] — shared by ReaderNotifier, TtsSettingsSheet, etc.
-final settingsServiceProvider = Provider<SettingsService>((ref) {
-  return SettingsService();
+/// Singleton [SettingsRepository] — shared by ReaderNotifier, TtsSettingsSheet, etc.
+///
+/// 保持原 provider 名称不变，所有消费者无需改代码。
+final settingsServiceProvider = Provider<SettingsRepository>((ref) {
+  return SettingsRepository();
 });
