@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'core/models/book.dart';
-import 'features/main_shell/main_shell.dart';
+import 'features/home/home_screen.dart';
 import 'features/reader/reader_screen.dart';
 
 class App extends StatelessWidget {
@@ -15,7 +15,7 @@ class App extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: const MainShell(),
+      home: const HomeScreen(),
       onGenerateRoute: (settings) {
         if (settings.name == '/reader') {
           final book = settings.arguments as Book;

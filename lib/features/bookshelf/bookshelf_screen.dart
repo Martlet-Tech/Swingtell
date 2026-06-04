@@ -35,7 +35,10 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
+    return Scaffold(
+      backgroundColor: Colors.grey[50],
+      appBar: AppBar(title: const Text('书架')),
+      body: ListenableBuilder(
       listenable: _vm,
       builder: (context, _) {
         final books = _vm.books;
@@ -69,6 +72,7 @@ class _BookshelfScreenState extends State<BookshelfScreen> {
           },
         );
       },
+    ),
     );
   }
 }

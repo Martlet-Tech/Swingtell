@@ -23,13 +23,16 @@ class ReaderSettingsAdapter extends TypeAdapter<ReaderSettings> {
       ..colorThemeIndex = fields[3] as int
       ..ttsSpeechRate = fields[4] as double
       ..ttsPitch = fields[6] as double
-      ..ttsVolume = fields[7] as double;
+      ..ttsVolume = fields[7] as double
+      ..aiApiKey = fields[8] as String
+      ..aiApiUrl = fields[9] as String
+      ..aiModel = fields[10] as String;
   }
 
   @override
   void write(BinaryWriter writer, ReaderSettings obj) {
     writer
-      ..writeByte(7)
+      ..writeByte(10)
       ..writeByte(0)
       ..write(obj.fontFamily)
       ..writeByte(1)
@@ -43,7 +46,13 @@ class ReaderSettingsAdapter extends TypeAdapter<ReaderSettings> {
       ..writeByte(6)
       ..write(obj.ttsPitch)
       ..writeByte(7)
-      ..write(obj.ttsVolume);
+      ..write(obj.ttsVolume)
+      ..writeByte(8)
+      ..write(obj.aiApiKey)
+      ..writeByte(9)
+      ..write(obj.aiApiUrl)
+      ..writeByte(10)
+      ..write(obj.aiModel);
   }
 
   @override

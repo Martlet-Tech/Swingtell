@@ -70,6 +70,10 @@ dependencies:
   # Image processing
   image: ^3.3.0
 
+  # AI chat
+  http: ^1.2.0
+  archive: ^3.4.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
