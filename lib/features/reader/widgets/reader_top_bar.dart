@@ -1,33 +1,24 @@
 import 'package:flutter/material.dart';
-import '../../../core/models/reader_settings.dart';
-import '../../../core/constants/app_constants.dart';
 
 class ReaderTopBar extends StatelessWidget {
-  final String title;
-  final ReaderSettings settings;
+  final String bookTitle;
+  final String chapterTitle;
   final VoidCallback onBack;
-  final VoidCallback onTtsPlay;
-  final VoidCallback onTtsSettings;
-  final bool isTtsPlaying;
 
   const ReaderTopBar({
     super.key,
-    required this.title,
-    required this.settings,
+    required this.bookTitle,
+    required this.chapterTitle,
     required this.onBack,
-    required this.onTtsPlay,
-    required this.onTtsSettings,
-    this.isTtsPlaying = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme = kColorThemes[settings.colorThemeIndex];
     return Container(
       padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top),
-      decoration: BoxDecoration(
-        color: theme.barBg.withValues(alpha: 0.95),
-        boxShadow: [BoxShadow(blurRadius: 4, color: Colors.black.withValues(alpha: 0.1))],
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        boxShadow: [BoxShadow(blurRadius: 4, color: Colors.black26)],
       ),
       child: Row(
         children: [
@@ -36,21 +27,25 @@ class ReaderTopBar extends StatelessWidget {
             onPressed: onBack,
           ),
           Expanded(
-            child: Text(
-              title,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  chapterTitle,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                ),
+                Text(
+                  bookTitle,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 10, color: Colors.grey),
+                ),
+              ],
             ),
           ),
-          IconButton(
-            icon: Icon(isTtsPlaying ? Icons.pause : Icons.play_arrow),
-            onPressed: onTtsPlay,
-          ),
-          IconButton(
-            icon: const Icon(Icons.tune),
-            onPressed: onTtsSettings,
-          ),
+          const SizedBox(width: 48),
         ],
       ),
     );

@@ -1,47 +1,53 @@
 import 'package:flutter/material.dart';
-import '../../../core/models/reader_settings.dart';
-import '../../../core/constants/app_constants.dart';
 
 class ReaderBottomBar extends StatelessWidget {
-  final ReaderSettings settings;
   final VoidCallback onChapterList;
   final VoidCallback onColorTheme;
   final VoidCallback onFontSettings;
+  final VoidCallback onTtsPlay;
+  final VoidCallback onTtsSettings;
+  final bool isTtsPlaying;
 
   const ReaderBottomBar({
     super.key,
-    required this.settings,
     required this.onChapterList,
     required this.onColorTheme,
     required this.onFontSettings,
+    required this.onTtsPlay,
+    required this.onTtsSettings,
+    this.isTtsPlaying = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme = kColorThemes[settings.colorThemeIndex];
     return Container(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
-      decoration: BoxDecoration(
-        color: theme.barBg.withValues(alpha: 0.95),
-        boxShadow: [BoxShadow(blurRadius: 4, color: Colors.black.withValues(alpha: 0.1))],
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        boxShadow: [BoxShadow(blurRadius: 4, color: Colors.black26)],
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          TextButton.icon(
+          IconButton(
             onPressed: onChapterList,
             icon: const Icon(Icons.list),
-            label: const Text('目录'),
           ),
-          TextButton.icon(
+          IconButton(
             onPressed: onColorTheme,
             icon: const Icon(Icons.palette),
-            label: const Text('配色'),
           ),
-          TextButton.icon(
+          IconButton(
             onPressed: onFontSettings,
             icon: const Icon(Icons.text_fields),
-            label: const Text('文字'),
+          ),
+          IconButton(
+            onPressed: onTtsPlay,
+            icon: Icon(isTtsPlaying ? Icons.pause : Icons.play_arrow),
+          ),
+          IconButton(
+            onPressed: onTtsSettings,
+            icon: const Icon(Icons.tune),
           ),
         ],
       ),

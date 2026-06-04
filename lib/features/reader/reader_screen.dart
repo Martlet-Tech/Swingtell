@@ -246,12 +246,11 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                   offset: _barsVisible ? Offset.zero : const Offset(0, -1),
                   duration: const Duration(milliseconds: 200),
                   child: ReaderTopBar(
-                    title: _vm.book.title,
-                    settings: _vm.settings,
+                    bookTitle: _vm.book.title,
+                    chapterTitle: _vm.chapterTitles.isNotEmpty
+                        ? _vm.chapterTitles[_vm.currentChapterIndex]
+                        : '',
                     onBack: _onBack,
-                    onTtsPlay: _onTtsPlay,
-                    onTtsSettings: _showTtsSettings,
-                    isTtsPlaying: _vm.isTtsPlaying,
                   ),
                 ),
               ),
@@ -261,10 +260,12 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                   offset: _barsVisible ? Offset.zero : const Offset(0, 1),
                   duration: const Duration(milliseconds: 200),
                   child: ReaderBottomBar(
-                    settings: _vm.settings,
                     onChapterList: _showChapterList,
                     onColorTheme: _showColorTheme,
                     onFontSettings: _showFontSettings,
+                    onTtsPlay: _onTtsPlay,
+                    onTtsSettings: _showTtsSettings,
+                    isTtsPlaying: _vm.isTtsPlaying,
                   ),
                 ),
               ),
