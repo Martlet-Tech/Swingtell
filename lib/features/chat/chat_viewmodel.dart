@@ -64,14 +64,15 @@ class ChatViewModel extends ChangeNotifier {
     _streamingContent = '';
     notifyListeners();
 
-    final recentMessages = _messages.length > 20
-        ? _messages.sublist(_messages.length - 20)
-        : _messages;
+    // 不包括刚发的这条，由 ChatService 拼到最后
+    final historyMessages = _messages.length > 20
+        ? _messages.sublist(_messages.length - 20, _messages.length - 1)
+        : _messages.sublist(0, _messages.length - 1);
 
-    _streamSub = _chatService
+      _streamSub = _chatService
         .sendMessage(
           character: _character!,
-          recentMessages: recentMessages,
+          recentMessages: historyMessages,
           userInput: text,
         )
         .listen(

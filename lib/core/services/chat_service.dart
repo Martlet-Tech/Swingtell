@@ -23,9 +23,13 @@ class ChatService {
       return;
     }
 
+    final namePrefix = '你现在是一个叫「${character.name}」的角色。';
+    final systemContent = character.systemPrompt.isNotEmpty
+        ? '$namePrefix${character.systemPrompt}'
+        : namePrefix;
+
     final messages = <Map<String, dynamic>>[
-      if (character.systemPrompt.isNotEmpty)
-        {'role': 'system', 'content': character.systemPrompt},
+      {'role': 'system', 'content': systemContent},
       ...recentMessages.map((m) => {'role': m.role, 'content': m.content}),
       {'role': 'user', 'content': userInput},
     ];
