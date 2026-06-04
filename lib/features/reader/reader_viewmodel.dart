@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import '../../core/models/book.dart';
 import '../../core/models/reading_progress.dart';
@@ -23,6 +25,14 @@ class ReaderViewModel extends ChangeNotifier {
   bool _loading = true;
   TtsState _ttsState = TtsState.idle;
 
+  // 浮动按钮
+  bool showFloatButtons = false;
+  Timer? _floatButtonTimer;
+
+  // 由 ReaderScreen 注入的回调
+  void Function(String text)? onRestoreScroll;
+  void Function(TtsState state)? onTtsStateChanged;
+
   ReaderViewModel({
     required EpubService epubService,
     required ProgressService progressService,
@@ -40,12 +50,26 @@ class ReaderViewModel extends ChangeNotifier {
   List<String> get chapterTitles => _chapterTitles;
   String? get currentHtml => _currentHtml;
   int get currentChapterIndex => _currentChapterIndex;
-  double get initialScrollOffset => _progress.scrollOffset;
   bool get isLoading => _loading;
   ReadingProgress get progress => _progress;
   ReaderSettings get settings => _settingsService.settings;
   bool get isTtsPlaying => _ttsState.isPlaying;
   TtsState get ttsState => _ttsState;
+
+  String get _plainText {
+    if (_currentChapterIndex >= _chapterTexts.length) return '';
+    return _chapterTexts[_currentChapterIndex];
+  }
+
+  List<String> get _currentParagraphs {
+    final text = _plainText;
+    if (text.isEmpty) return [];
+    return text
+        .split(RegExp(r'\n{1,}'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+  }
 
   Future<void> init() async {
     try {
@@ -73,21 +97,70 @@ class ReaderViewModel extends ChangeNotifier {
 
   void _onTtsStateChanged(TtsState state) {
     _ttsState = state;
+    onTtsStateChanged?.call(state);
+    if (state.chapterIndex != _currentChapterIndex && state.isPlaying) {
+      goToChapter(state.chapterIndex);
+    }
     notifyListeners();
   }
 
-  void onScroll(double scrollY, double pageHeight) {
-    _progress.scrollOffset = scrollY;
-    _progress.percentage = (_currentChapterIndex / _chapters.length) +
-        (scrollY / pageHeight) * (1 / _chapters.length);
-    _progressService.saveProgress(_progress);
+  void onScrollSettled(String visibleText) {
+    if (visibleText.isEmpty) return;
+    final offset = _findCharOffset(visibleText);
+    if (offset >= 0) {
+      _progress.charOffset = offset;
+      _progress.percentage = _calcPercentage();
+      _progressService.saveProgress(_progress);
+    }
+    _onUserScroll();
   }
 
-  void goToChapter(int index) {
+  void onPageReady() {
+    if (_progress.charOffset > 0) {
+      final text = _textAtOffset(_progress.charOffset);
+      onRestoreScroll?.call(text);
+    }
+  }
+
+  double _calcPercentage() {
+    final text = _plainText;
+    if (text.isEmpty) return 0;
+    return (_currentChapterIndex / _chapters.length) +
+        (_progress.charOffset / text.length) * (1 / _chapters.length);
+  }
+
+  int _findCharOffset(String visibleText) {
+    final text = _plainText;
+    if (visibleText.isEmpty || text.isEmpty) return -1;
+    final anchor = visibleText.substring(0, min(20, visibleText.length));
+    return text.indexOf(anchor);
+  }
+
+  String _textAtOffset(int charOffset) {
+    final text = _plainText;
+    if (charOffset >= text.length) return '';
+    final end = _findNextSentenceEnd(text, charOffset);
+    return text.substring(charOffset, end);
+  }
+
+  int _findNextSentenceEnd(String text, int start) {
+    const ends = ['。', '！', '？', '\n', '.', '!', '?'];
+    int earliest = text.length;
+    for (final e in ends) {
+      final idx = text.indexOf(e, start);
+      if (idx != -1 && idx < earliest) earliest = idx + 1;
+    }
+    return earliest < text.length ? earliest : text.length;
+  }
+
+  void goToChapter(int index, {bool userInitiated = false}) {
     if (index < 0 || index >= _chapters.length) return;
-    _progressService.saveProgress(_progress);
+    if (userInitiated) {
+      _progressService.saveProgress(_progress);
+      _ttsPipeline.stop();
+    }
     _progress.chapterIndex = index;
-    _progress.scrollOffset = 0.0;
+    _progress.charOffset = 0;
     _currentChapterIndex = index;
     _currentHtml = _chapters[index];
     notifyListeners();
@@ -112,6 +185,54 @@ class ReaderViewModel extends ChangeNotifier {
     await _ttsPipeline.stop();
   }
 
+  void _onUserScroll() {
+    if (!_ttsState.isPlaying) return;
+    if (showFloatButtons) {
+      showFloatButtons = false;
+      notifyListeners();
+    }
+    _floatButtonTimer?.cancel();
+    _floatButtonTimer = Timer(const Duration(seconds: 1), () {
+      if (_ttsState.isPlaying) {
+        showFloatButtons = true;
+        notifyListeners();
+      }
+    });
+  }
+
+  void hideFloatButtons() {
+    showFloatButtons = false;
+    notifyListeners();
+  }
+
+  Future<void> seekTtsToVisibleText(String visibleText) async {
+    final offset = _findCharOffset(visibleText);
+    if (offset < 0) return;
+
+    final text = _plainText;
+    int unitIndex = 0;
+    for (int i = 0; i < text.length;) {
+      while (i < text.length && text[i] == '\n') { i++; }
+      if (i >= text.length) break;
+      final end = text.indexOf('\n', i);
+      final paraEnd = end == -1 ? text.length : end;
+      if (text.substring(i, paraEnd).trim().isNotEmpty) {
+        if (offset >= i && offset < paraEnd) break;
+        unitIndex++;
+      }
+      i = end == -1 ? text.length : end + 1;
+    }
+
+    final paragraphs = _currentParagraphs;
+    if (unitIndex >= paragraphs.length) unitIndex = paragraphs.length - 1;
+
+    await _ttsPipeline.start(
+      chapterTexts: _chapterTexts,
+      chapterIndex: _currentChapterIndex,
+      paragraphOffset: unitIndex,
+    );
+  }
+
   void onAppPause() {
     _progressService.saveProgress(_progress);
   }
@@ -119,6 +240,7 @@ class ReaderViewModel extends ChangeNotifier {
   @override
   void dispose() {
     _settingsService.removeListener(_onSettingsChanged);
+    _floatButtonTimer?.cancel();
     super.dispose();
   }
 }

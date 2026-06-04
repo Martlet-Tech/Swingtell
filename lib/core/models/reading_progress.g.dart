@@ -19,7 +19,7 @@ class ReadingProgressAdapter extends TypeAdapter<ReadingProgress> {
     return ReadingProgress()
       ..bookId = fields[0] as String
       ..chapterIndex = fields[1] as int
-      ..scrollOffset = fields[2] as double
+      ..charOffset = fields[2] as int
       ..percentage = fields[3] as double
       ..updatedAt = fields[4] as DateTime;
   }
@@ -33,7 +33,7 @@ class ReadingProgressAdapter extends TypeAdapter<ReadingProgress> {
       ..writeByte(1)
       ..write(obj.chapterIndex)
       ..writeByte(2)
-      ..write(obj.scrollOffset)
+      ..write(obj.charOffset)
       ..writeByte(3)
       ..write(obj.percentage)
       ..writeByte(4)

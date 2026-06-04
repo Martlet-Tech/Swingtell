@@ -3,11 +3,13 @@ class TtsState {
   final int chapterIndex;
   final int paragraphIndex;
   final int totalParagraphs;
+  final String currentUnitText;
   const TtsState({
     required this.isPlaying,
     required this.chapterIndex,
     required this.paragraphIndex,
     required this.totalParagraphs,
+    this.currentUnitText = '',
   });
   static const idle = TtsState(
     isPlaying: false,

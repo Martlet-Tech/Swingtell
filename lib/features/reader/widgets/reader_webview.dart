@@ -5,23 +5,23 @@ import '../../../core/constants/app_constants.dart';
 
 class ReaderWebview extends StatefulWidget {
   final String chapterHtml;
-  final double initialScrollOffset;
   final ReaderSettings settings;
-  final void Function(double scrollY, double pageHeight) onScroll;
+  final void Function(String visibleText) onScroll;
+  final VoidCallback? onPageReady;
 
   const ReaderWebview({
     super.key,
     required this.chapterHtml,
-    required this.initialScrollOffset,
     required this.settings,
     required this.onScroll,
+    this.onPageReady,
   });
 
   @override
-  State<ReaderWebview> createState() => _ReaderWebviewState();
+  State<ReaderWebview> createState() => ReaderWebviewState();
 }
 
-class _ReaderWebviewState extends State<ReaderWebview> {
+class ReaderWebviewState extends State<ReaderWebview> {
   late final WebViewController _controller;
 
   @override
@@ -32,10 +32,7 @@ class _ReaderWebviewState extends State<ReaderWebview> {
       ..addJavaScriptChannel(
         'ScrollBridge',
         onMessageReceived: (msg) {
-          final parts = msg.message.split(',');
-          final scrollY = double.tryParse(parts[0]) ?? 0;
-          final pageHeight = double.tryParse(parts[1]) ?? 1;
-          widget.onScroll(scrollY, pageHeight);
+          widget.onScroll(msg.message);
         },
       )
       ..setNavigationDelegate(NavigationDelegate(
@@ -56,12 +53,9 @@ class _ReaderWebviewState extends State<ReaderWebview> {
 
   Future<void> _onPageReady() async {
     await _injectCss(widget.settings);
-    if (widget.initialScrollOffset > 0) {
-      await _controller.runJavaScript(
-        'window.scrollTo(0, ${widget.initialScrollOffset});',
-      );
-    }
     await _injectScrollListener();
+    await _injectLyricSupport();
+    widget.onPageReady?.call();
   }
 
   Future<void> _injectCss(ReaderSettings s) async {
@@ -82,6 +76,7 @@ class _ReaderWebviewState extends State<ReaderWebview> {
     await _controller.runJavaScript(
       "document.getElementById('reader-style').textContent = `$css`;",
     );
+    await _updateTopMaskBg(s);
   }
 
   Future<void> _injectScrollListener() async {
@@ -92,17 +87,174 @@ class _ReaderWebviewState extends State<ReaderWebview> {
           if (timer) return;
           timer = setTimeout(function() {
             timer = null;
-            ScrollBridge.postMessage(
-              window.scrollY + ',' + document.body.scrollHeight
-            );
+            var text = typeof window.getFirstVisibleText === 'function'
+              ? window.getFirstVisibleText() : '';
+            ScrollBridge.postMessage(text);
           }, 500);
         });
       })();
     ''');
   }
 
-  Future<void> updateStyle(ReaderSettings settings) async {
-    await _injectCss(settings);
+  Future<void> _injectLyricSupport() async {
+    await _controller.runJavaScript('''
+      (function() {
+        var mask = document.createElement('div');
+        mask.id = 'top-mask';
+        mask.style.cssText = [
+          'position: fixed',
+          'top: 0', 'left: 0', 'right: 0',
+          'height: 28%',
+          'pointer-events: none',
+          'z-index: 99',
+          'display: none',
+          'background: linear-gradient(to bottom, rgb(248,243,232) 50%, transparent 100%)',
+        ].join(';');
+        document.body.appendChild(mask);
+        document.documentElement.style.setProperty('--bg', 'rgb(248,243,232)');
+
+        window.setLyricMode = function(active, bgColorRgb) {
+          var el = document.getElementById('top-mask');
+          if (!el) return;
+          el.style.display = active ? 'block' : 'none';
+          if (bgColorRgb) {
+            document.documentElement.style.setProperty('--bg', bgColorRgb);
+            el.style.background =
+              'linear-gradient(to bottom, ' + bgColorRgb + ' 50%, transparent 100%)';
+          }
+        };
+
+        var _hlEl = null;
+
+        window.trackReadingUnit = function(searchText, lyricMode) {
+          if (!searchText || searchText.length < 3) return;
+          var anchor = searchText.substring(0, Math.min(20, searchText.length));
+          var walker = document.createTreeWalker(
+            document.body, NodeFilter.SHOW_TEXT, null, false
+          );
+          var targetEl = null, node;
+          while ((node = walker.nextNode())) {
+            if (node.textContent.indexOf(anchor) !== -1) {
+              targetEl = node.parentElement;
+              break;
+            }
+          }
+          if (!targetEl) return;
+
+          if (_hlEl && _hlEl !== targetEl) {
+            _hlEl.style.backgroundColor = '';
+            _hlEl.style.borderRadius = '';
+          }
+          targetEl.style.backgroundColor = 'rgba(255, 200, 50, 0.35)';
+          targetEl.style.borderRadius = '3px';
+          _hlEl = targetEl;
+
+          if (lyricMode) {
+            var absTop = targetEl.getBoundingClientRect().top + window.scrollY;
+            var targetY = Math.max(0, absTop - window.innerHeight * 0.25);
+            window.scrollTo({ top: targetY, behavior: 'smooth' });
+          }
+        };
+
+        window.clearHighlight = function() {
+          if (_hlEl) {
+            _hlEl.style.backgroundColor = '';
+            _hlEl.style.borderRadius = '';
+            _hlEl = null;
+          }
+          window.setLyricMode(false);
+        };
+
+        window.getFirstVisibleText = function() {
+          var walker = document.createTreeWalker(
+            document.body, NodeFilter.SHOW_TEXT, null, false
+          );
+          var node;
+          while ((node = walker.nextNode())) {
+            var rect = node.parentElement.getBoundingClientRect();
+            if (rect.top >= 0 && rect.top < window.innerHeight * 0.4) {
+              var t = (node.textContent || '').trim();
+              if (t.length > 5) return t.substring(0, 30);
+            }
+          }
+          return '';
+        };
+      })();
+    ''');
+  }
+
+  Future<void> _updateTopMaskBg(ReaderSettings s) async {
+    final theme = kColorThemes[s.colorThemeIndex];
+    final r = (theme.bg.r * 255).round().clamp(0, 255);
+    final g = (theme.bg.g * 255).round().clamp(0, 255);
+    final b = (theme.bg.b * 255).round().clamp(0, 255);
+    await _controller.runJavaScript(
+      "window.setLyricMode(false, 'rgb($r,$g,$b)');",
+    );
+  }
+
+  // ── Public methods ─────────────────────────────────
+
+  Future<void> updateStyle(ReaderSettings s) async {
+    await _injectCss(s);
+  }
+
+  Future<void> scrollToText(String text) async {
+    if (text.isEmpty) return;
+    final safe = text
+        .substring(0, text.length > 20 ? 20 : text.length)
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", "\\'")
+        .replaceAll('\n', ' ');
+    await _controller.runJavaScript('''
+      (function() {
+        var anchor = '$safe';
+        var walker = document.createTreeWalker(
+          document.body, NodeFilter.SHOW_TEXT, null, false
+        );
+        var node;
+        while ((node = walker.nextNode())) {
+          if (node.textContent.indexOf(anchor) !== -1) {
+            var rect = node.parentElement.getBoundingClientRect();
+            window.scrollTo(0, Math.max(0, rect.top + window.scrollY - 10));
+            return;
+          }
+        }
+      })();
+    ''');
+  }
+
+  Future<void> trackReadingUnit(String text, {bool lyricMode = false}) async {
+    if (text.isEmpty) return;
+    final safe = text
+        .substring(0, text.length > 20 ? 20 : text.length)
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", "\\'")
+        .replaceAll('\n', ' ');
+    await _controller.runJavaScript(
+      "window.trackReadingUnit('$safe', $lyricMode);",
+    );
+  }
+
+  Future<void> setLyricMode(bool active) async {
+    final theme = kColorThemes[widget.settings.colorThemeIndex];
+    final r = (theme.bg.r * 255).round().clamp(0, 255);
+    final g = (theme.bg.g * 255).round().clamp(0, 255);
+    final b = (theme.bg.b * 255).round().clamp(0, 255);
+    await _controller.runJavaScript(
+      "window.setLyricMode($active, 'rgb($r,$g,$b)');",
+    );
+  }
+
+  Future<void> clearHighlight() async {
+    await _controller.runJavaScript('window.clearHighlight();');
+  }
+
+  Future<String> getFirstVisibleText() async {
+    final result = await _controller.runJavaScriptReturningResult(
+      'window.getFirstVisibleText()',
+    );
+    return result.toString();
   }
 
   @override

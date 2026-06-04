@@ -13,7 +13,7 @@ class ProgressService {
         (ReadingProgress()
           ..bookId = bookId
           ..chapterIndex = 0
-          ..scrollOffset = 0.0
+          ..charOffset = 0
           ..percentage = 0.0
           ..updatedAt = DateTime.now());
   }

@@ -27,7 +27,11 @@ class ReaderScreen extends StatefulWidget {
 class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver {
   late ReaderViewModel _vm;
   late SettingsService _settingsService;
+  final _webviewKey = GlobalKey<ReaderWebviewState>();
   bool _barsVisible = false;
+  bool _prevTtsPlaying = false;
+  bool _ttsPausing = false;
+  String _lastTrackedText = '';
 
   @override
   void initState() {
@@ -41,6 +45,10 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
       ttsPipeline: context.read<TtsPipeline>(),
       book: widget.book,
     );
+    _vm.onTtsStateChanged = _onTtsStateChanged;
+    _vm.onRestoreScroll = (text) {
+      _webviewKey.currentState?.scrollToText(text);
+    };
     _vm.init();
   }
 
@@ -59,6 +67,35 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     }
   }
 
+  void _onTtsStateChanged(TtsState state) {
+    final webview = _webviewKey.currentState;
+
+    if (state.isPlaying && !_prevTtsPlaying) {
+      webview?.setLyricMode(true);
+    }
+    if (!state.isPlaying && _prevTtsPlaying) {
+      if (_ttsPausing) {
+        webview?.setLyricMode(false);
+        _ttsPausing = false;
+      } else {
+        webview?.clearHighlight();
+      }
+    }
+    _prevTtsPlaying = state.isPlaying;
+
+    if (state.isPlaying &&
+        state.currentUnitText.isNotEmpty &&
+        state.currentUnitText != _lastTrackedText) {
+      _lastTrackedText = state.currentUnitText;
+      webview?.trackReadingUnit(state.currentUnitText, lyricMode: true);
+    }
+  }
+
+  void _onTtsPlay() {
+    if (_vm.isTtsPlaying) _ttsPausing = true;
+    _vm.toggleTts();
+  }
+
   void _toggleBars() {
     setState(() => _barsVisible = !_barsVisible);
   }
@@ -74,7 +111,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
       builder: (_) => ChapterListSheet(
         titles: _vm.chapterTitles,
         currentIndex: _vm.currentChapterIndex,
-        onTap: _vm.goToChapter,
+          onTap: (i) => _vm.goToChapter(i, userInitiated: true),
       ),
     );
   }
@@ -108,16 +145,27 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     );
   }
 
-  void _toggleReadingMode() {
-    final mode = _vm.settings.readingMode == 'scroll' ? 'page' : 'scroll';
-    _settingsService.update(_vm.settings.copyWith(readingMode: mode));
-  }
-
   void _showTtsSettings() {
     showModalBottomSheet(
       context: context,
       builder: (_) => const TtsSettingsPanel(),
     );
+  }
+
+  void _onReturnToTts() {
+    final webview = _webviewKey.currentState;
+    if (webview == null) return;
+    _vm.hideFloatButtons();
+    webview.trackReadingUnit(_lastTrackedText, lyricMode: true);
+  }
+
+  Future<void> _onStartTtsHere() async {
+    final webview = _webviewKey.currentState;
+    if (webview == null) return;
+    _vm.hideFloatButtons();
+    final visibleText = await webview.getFirstVisibleText();
+    if (visibleText.isEmpty) return;
+    await _vm.seekTtsToVisibleText(visibleText);
   }
 
   @override
@@ -157,15 +205,34 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
           body: Stack(
             children: [
               ReaderWebview(
+                key: _webviewKey,
                 chapterHtml: html,
-                initialScrollOffset: _vm.initialScrollOffset,
                 settings: _vm.settings,
-                onScroll: _vm.onScroll,
+                onScroll: _vm.onScrollSettled,
+                onPageReady: _vm.onPageReady,
               ),
-              GestureLayer(
-                readingMode: _vm.settings.readingMode,
-                onTapCenter: _toggleBars,
-              ),
+              GestureLayer(onTapCenter: _toggleBars),
+              if (_vm.showFloatButtons)
+                Positioned(
+                  bottom: 80,
+                  right: 16,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      _FloatButton(
+                        icon: Icons.keyboard_return,
+                        label: '回到朗读处',
+                        onTap: _onReturnToTts,
+                      ),
+                      const SizedBox(height: 8),
+                      _FloatButton(
+                        icon: Icons.play_arrow,
+                        label: '在这开始读',
+                        onTap: _onStartTtsHere,
+                      ),
+                    ],
+                  ),
+                ),
               Positioned(
                 top: 0, left: 0, right: 0,
                 child: AnimatedSlide(
@@ -175,7 +242,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                     title: _vm.book.title,
                     settings: _vm.settings,
                     onBack: _onBack,
-                    onTtsPlay: _vm.toggleTts,
+                    onTtsPlay: _onTtsPlay,
                     onTtsSettings: _showTtsSettings,
                     isTtsPlaying: _vm.isTtsPlaying,
                   ),
@@ -186,12 +253,11 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                 child: AnimatedSlide(
                   offset: _barsVisible ? Offset.zero : const Offset(0, 1),
                   duration: const Duration(milliseconds: 200),
-                    child: ReaderBottomBar(
+                  child: ReaderBottomBar(
                     settings: _vm.settings,
                     onChapterList: _showChapterList,
                     onColorTheme: _showColorTheme,
                     onFontSettings: _showFontSettings,
-                    onReadingModeToggle: _toggleReadingMode,
                   ),
                 ),
               ),
@@ -199,6 +265,42 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
           ),
         );
       },
+    );
+  }
+}
+
+class _FloatButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _FloatButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(24),
+      color: Colors.white,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 20),
+              const SizedBox(width: 6),
+              Text(label, style: const TextStyle(fontSize: 14)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

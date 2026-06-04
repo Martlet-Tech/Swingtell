@@ -20,6 +20,7 @@ class TtsPipelineImpl implements TtsPipeline {
   bool _disposed = false;
   int _consecutiveErrors = 0;
   static const int _maxConsecutiveErrors = 3;
+  
 
   TtsPipelineImpl({TtsTextCorrector? corrector})
       : _corrector = corrector ?? PassthroughCorrector();
@@ -275,6 +276,9 @@ class TtsPipelineImpl implements TtsPipeline {
       chapterIndex: _chapterIndex,
       paragraphIndex: _paragraphIndex,
       totalParagraphs: _currentParagraphs.length,
+      currentUnitText: _paragraphIndex < _currentParagraphs.length
+          ? _currentParagraphs[_paragraphIndex]
+          : '',
     ));
   }
 }

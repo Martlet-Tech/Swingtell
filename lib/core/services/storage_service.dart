@@ -15,8 +15,21 @@ class StorageService {
     Hive.registerAdapter(ReadingProgressAdapter());
     Hive.registerAdapter(ReaderSettingsAdapter());
     _bookBox = await Hive.openBox<Book>('books');
-    await Hive.openBox<ReadingProgress>('progress');
-    await Hive.openBox<ReaderSettings>('settings');
+    await _openOrResetBox<ReadingProgress>('progress');
+    await _openOrResetBox<ReaderSettings>('settings');
+  }
+
+  Future<Box<T>> _openOrResetBox<T>(String name) async {
+    try {
+      return await Hive.openBox<T>(name);
+    } catch (_) {
+      try {
+        await Hive.deleteBoxFromDisk(name);
+      } catch (_) {
+        // deleteBoxFromDisk 可能因 .lock 不存在而失败，忽略
+      }
+      return await Hive.openBox<T>(name);
+    }
   }
 
   Future<Directory> getBooksDirectory() async {

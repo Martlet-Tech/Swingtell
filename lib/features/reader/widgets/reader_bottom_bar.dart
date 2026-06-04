@@ -7,7 +7,6 @@ class ReaderBottomBar extends StatelessWidget {
   final VoidCallback onChapterList;
   final VoidCallback onColorTheme;
   final VoidCallback onFontSettings;
-  final VoidCallback onReadingModeToggle;
 
   const ReaderBottomBar({
     super.key,
@@ -15,7 +14,6 @@ class ReaderBottomBar extends StatelessWidget {
     required this.onChapterList,
     required this.onColorTheme,
     required this.onFontSettings,
-    required this.onReadingModeToggle,
   });
 
   @override
@@ -44,11 +42,6 @@ class ReaderBottomBar extends StatelessWidget {
             onPressed: onFontSettings,
             icon: const Icon(Icons.text_fields),
             label: const Text('文字'),
-          ),
-          TextButton.icon(
-            onPressed: onReadingModeToggle,
-            icon: Icon(settings.readingMode == 'scroll' ? Icons.swap_vert : Icons.swap_horiz),
-            label: Text(settings.readingMode == 'scroll' ? '滚动' : '翻页'),
           ),
         ],
       ),

@@ -21,8 +21,7 @@ class ReaderSettingsAdapter extends TypeAdapter<ReaderSettings> {
       ..fontSize = fields[1] as double
       ..lineHeight = fields[2] as double
       ..colorThemeIndex = fields[3] as int
-      ..readingMode = fields[4] as String
-      ..ttsSpeechRate = fields[5] as double
+      ..ttsSpeechRate = fields[4] as double
       ..ttsPitch = fields[6] as double
       ..ttsVolume = fields[7] as double;
   }
@@ -30,7 +29,7 @@ class ReaderSettingsAdapter extends TypeAdapter<ReaderSettings> {
   @override
   void write(BinaryWriter writer, ReaderSettings obj) {
     writer
-      ..writeByte(8)
+      ..writeByte(7)
       ..writeByte(0)
       ..write(obj.fontFamily)
       ..writeByte(1)
@@ -40,8 +39,6 @@ class ReaderSettingsAdapter extends TypeAdapter<ReaderSettings> {
       ..writeByte(3)
       ..write(obj.colorThemeIndex)
       ..writeByte(4)
-      ..write(obj.readingMode)
-      ..writeByte(5)
       ..write(obj.ttsSpeechRate)
       ..writeByte(6)
       ..write(obj.ttsPitch)
