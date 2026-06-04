@@ -28,10 +28,13 @@ class ReaderViewModel extends ChangeNotifier {
   // 浮动按钮
   bool showFloatButtons = false;
   Timer? _floatButtonTimer;
+  bool _autoScrollEnabled = true;
+  String _lastScrollText = '';
 
   // 由 ReaderScreen 注入的回调
   void Function(String text)? onRestoreScroll;
   void Function(TtsState state)? onTtsStateChanged;
+  void Function(String visibleText)? onPreviewPosition;
 
   ReaderViewModel({
     required EpubService epubService,
@@ -55,6 +58,9 @@ class ReaderViewModel extends ChangeNotifier {
   ReaderSettings get settings => _settingsService.settings;
   bool get isTtsPlaying => _ttsState.isPlaying;
   TtsState get ttsState => _ttsState;
+  bool get autoScrollEnabled => _autoScrollEnabled;
+  String get lastScrollText => _lastScrollText;
+  void setAutoScroll(bool v) => _autoScrollEnabled = v;
 
   String get _plainText {
     if (_currentChapterIndex >= _chapterTexts.length) return '';
@@ -112,7 +118,7 @@ class ReaderViewModel extends ChangeNotifier {
       _progress.percentage = _calcPercentage();
       _progressService.saveProgress(_progress);
     }
-    _onUserScroll();
+    _onUserScroll(visibleText);
   }
 
   void onPageReady() {
@@ -153,6 +159,23 @@ class ReaderViewModel extends ChangeNotifier {
     return earliest < text.length ? earliest : text.length;
   }
 
+  int _findParagraphAtOffset(int charOffset) {
+    final text = _plainText;
+    int count = 0;
+    for (int i = 0; i < text.length;) {
+      while (i < text.length && text[i] == '\n') { i++; }
+      if (i >= text.length) break;
+      final end = text.indexOf('\n', i);
+      final paraEnd = end == -1 ? text.length : end;
+      if (text.substring(i, paraEnd).trim().isNotEmpty) {
+        if (charOffset >= i && charOffset < paraEnd) return count;
+        count++;
+      }
+      i = end == -1 ? text.length : end + 1;
+    }
+    return 0;
+  }
+
   void goToChapter(int index, {bool userInitiated = false}) {
     if (index < 0 || index >= _chapters.length) return;
     if (userInitiated) {
@@ -173,9 +196,13 @@ class ReaderViewModel extends ChangeNotifier {
       if (_ttsState.paragraphIndex > 0) {
         await _ttsPipeline.resume();
       } else {
+        final paraOffset = _progress.charOffset > 0
+            ? _findParagraphAtOffset(_progress.charOffset)
+            : 0;
         await _ttsPipeline.start(
           chapterTexts: _chapterTexts,
           chapterIndex: _currentChapterIndex,
+          paragraphOffset: paraOffset,
         );
       }
     }
@@ -185,8 +212,11 @@ class ReaderViewModel extends ChangeNotifier {
     await _ttsPipeline.stop();
   }
 
-  void _onUserScroll() {
+  void _onUserScroll(String visibleText) {
     if (!_ttsState.isPlaying) return;
+    _autoScrollEnabled = false;
+    _lastScrollText = visibleText;
+    onPreviewPosition?.call(visibleText);
     if (showFloatButtons) {
       showFloatButtons = false;
       notifyListeners();

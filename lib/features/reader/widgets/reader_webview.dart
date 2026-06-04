@@ -82,8 +82,9 @@ class ReaderWebviewState extends State<ReaderWebview> {
   Future<void> _injectScrollListener() async {
     await _controller.runJavaScript('''
       (function() {
-        let timer = null;
+        var timer = null;
         window.addEventListener('scroll', function() {
+          if (window._ttsScrolling) return;
           if (timer) return;
           timer = setTimeout(function() {
             timer = null;
@@ -99,6 +100,11 @@ class ReaderWebviewState extends State<ReaderWebview> {
   Future<void> _injectLyricSupport() async {
     await _controller.runJavaScript('''
       (function() {
+        window._ttsScrolling = false;
+        document.addEventListener('pointerdown', function() {
+          window._ttsScrolling = false;
+        });
+
         var mask = document.createElement('div');
         mask.id = 'top-mask';
         mask.style.cssText = [
@@ -125,6 +131,7 @@ class ReaderWebviewState extends State<ReaderWebview> {
         };
 
         var _hlEl = null;
+        var _previewEl = null;
 
         window.trackReadingUnit = function(searchText, lyricMode) {
           if (!searchText || searchText.length < 3) return;
@@ -145,14 +152,23 @@ class ReaderWebviewState extends State<ReaderWebview> {
             _hlEl.style.backgroundColor = '';
             _hlEl.style.borderRadius = '';
           }
+          if (_previewEl) {
+            _previewEl.style.backgroundColor = '';
+            _previewEl.style.borderRadius = '';
+            _previewEl = null;
+          }
           targetEl.style.backgroundColor = 'rgba(255, 200, 50, 0.35)';
           targetEl.style.borderRadius = '3px';
           _hlEl = targetEl;
 
           if (lyricMode) {
+            window._ttsScrolling = true;
             var absTop = targetEl.getBoundingClientRect().top + window.scrollY;
             var targetY = Math.max(0, absTop - window.innerHeight * 0.25);
             window.scrollTo({ top: targetY, behavior: 'smooth' });
+            setTimeout(function() {
+              if (window._ttsScrolling) window._ttsScrolling = false;
+            }, 600);
           }
         };
 
@@ -162,7 +178,42 @@ class ReaderWebviewState extends State<ReaderWebview> {
             _hlEl.style.borderRadius = '';
             _hlEl = null;
           }
+          window.clearPreview();
           window.setLyricMode(false);
+        };
+
+        window.previewReadingUnit = function(searchText) {
+          if (!searchText || searchText.length < 3) return;
+          var anchor = searchText.substring(0, Math.min(20, searchText.length));
+          var walker = document.createTreeWalker(
+            document.body, NodeFilter.SHOW_TEXT, null, false
+          );
+          var targetEl = null, node;
+          while ((node = walker.nextNode())) {
+            if (node.textContent.indexOf(anchor) !== -1) {
+              targetEl = node.parentElement;
+              break;
+            }
+          }
+          if (!targetEl) return;
+
+          if (_previewEl && _previewEl !== targetEl) {
+            _previewEl.style.backgroundColor = '';
+            _previewEl.style.borderRadius = '';
+          }
+          if (targetEl !== _hlEl) {
+            targetEl.style.backgroundColor = 'rgba(255, 200, 50, 0.15)';
+            targetEl.style.borderRadius = '3px';
+          }
+          _previewEl = targetEl;
+        };
+
+        window.clearPreview = function() {
+          if (_previewEl) {
+            _previewEl.style.backgroundColor = '';
+            _previewEl.style.borderRadius = '';
+            _previewEl = null;
+          }
         };
 
         window.getFirstVisibleText = function() {
@@ -216,7 +267,7 @@ class ReaderWebviewState extends State<ReaderWebview> {
         while ((node = walker.nextNode())) {
           if (node.textContent.indexOf(anchor) !== -1) {
             var rect = node.parentElement.getBoundingClientRect();
-            window.scrollTo(0, Math.max(0, rect.top + window.scrollY - 10));
+            window.scrollTo(0, Math.max(0, rect.top + window.scrollY - window.innerHeight * 0.25));
             return;
           }
         }
@@ -255,6 +306,22 @@ class ReaderWebviewState extends State<ReaderWebview> {
       'window.getFirstVisibleText()',
     );
     return result.toString();
+  }
+
+  Future<void> previewReadingUnit(String text) async {
+    if (text.isEmpty) return;
+    final safe = text
+        .substring(0, text.length > 20 ? 20 : text.length)
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", "\\'")
+        .replaceAll('\n', ' ');
+    await _controller.runJavaScript(
+      "window.previewReadingUnit('$safe');",
+    );
+  }
+
+  Future<void> clearPreview() async {
+    await _controller.runJavaScript('window.clearPreview();');
   }
 
   @override

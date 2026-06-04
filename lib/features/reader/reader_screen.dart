@@ -49,6 +49,9 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     _vm.onRestoreScroll = (text) {
       _webviewKey.currentState?.scrollToText(text);
     };
+    _vm.onPreviewPosition = (text) {
+      _webviewKey.currentState?.previewReadingUnit(text);
+    };
     _vm.init();
   }
 
@@ -87,7 +90,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
         state.currentUnitText.isNotEmpty &&
         state.currentUnitText != _lastTrackedText) {
       _lastTrackedText = state.currentUnitText;
-      webview?.trackReadingUnit(state.currentUnitText, lyricMode: true);
+      webview?.trackReadingUnit(state.currentUnitText, lyricMode: _vm.autoScrollEnabled);
     }
   }
 
@@ -155,15 +158,19 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   void _onReturnToTts() {
     final webview = _webviewKey.currentState;
     if (webview == null) return;
+    _vm.setAutoScroll(true);
     _vm.hideFloatButtons();
+    webview.clearPreview();
     webview.trackReadingUnit(_lastTrackedText, lyricMode: true);
   }
 
   Future<void> _onStartTtsHere() async {
     final webview = _webviewKey.currentState;
     if (webview == null) return;
+    _vm.setAutoScroll(true);
     _vm.hideFloatButtons();
-    final visibleText = await webview.getFirstVisibleText();
+    webview.clearPreview();
+    final visibleText = _vm.lastScrollText;
     if (visibleText.isEmpty) return;
     await _vm.seekTtsToVisibleText(visibleText);
   }
