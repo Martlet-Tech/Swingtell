@@ -54,28 +54,16 @@ class TtsSettingsPanel extends StatelessWidget {
               _updateSettings(settingsService, s, ttsPitch: pitch);
             },
           ),
-          const SizedBox(height: 8),
-          _SliderRow(
-            label: '音量',
-            value: s.ttsVolume,
-            divisions: 10,
-            displayValue: '${(s.ttsVolume * 100).toInt()}%',
-            onChanged: (v) {
-              ttsPipeline.updateVoiceSettings(volume: v);
-              _updateSettings(settingsService, s, ttsVolume: v);
-            },
-          ),
         ],
       ),
     );
   }
 
   void _updateSettings(SettingsService svc, ReaderSettings current,
-      {double? ttsSpeechRate, double? ttsPitch, double? ttsVolume}) {
+      {double? ttsSpeechRate, double? ttsPitch}) {
     svc.update(current.copyWith(
       ttsSpeechRate: ttsSpeechRate,
       ttsPitch: ttsPitch,
-      ttsVolume: ttsVolume,
     ));
   }
 }

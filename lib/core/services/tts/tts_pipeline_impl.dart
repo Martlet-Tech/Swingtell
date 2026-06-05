@@ -195,7 +195,7 @@ class TtsPipelineImpl implements TtsPipeline {
   }
 
   @override
-  Future<void> updateVoiceSettings({double? rate, double? pitch, double? volume}) async {
+  Future<void> updateVoiceSettings({double? rate, double? pitch}) async {
     if (rate != null) await _ttsSetRate(rate);
     if (pitch != null) await _ttsSetPitch(pitch);
     if (_playing && (rate != null || pitch != null)) {

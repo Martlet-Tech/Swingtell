@@ -10,7 +10,6 @@ class ReaderSettings extends HiveObject {
   @HiveField(3) int colorThemeIndex = 0;
   @HiveField(4) double ttsSpeechRate = 0.5;
   @HiveField(6) double ttsPitch = 1.0;
-  @HiveField(7) double ttsVolume = 1.0;
   @HiveField(8) String aiApiKey = '';
   @HiveField(9) String aiApiUrl = 'https://api.openai.com/v1';
   @HiveField(10) String aiModel = 'gpt-4o-mini';
@@ -22,7 +21,6 @@ class ReaderSettings extends HiveObject {
     int? colorThemeIndex,
     double? ttsSpeechRate,
     double? ttsPitch,
-    double? ttsVolume,
     String? aiApiKey,
     String? aiApiUrl,
     String? aiModel,
@@ -34,7 +32,6 @@ class ReaderSettings extends HiveObject {
         ..colorThemeIndex = colorThemeIndex ?? this.colorThemeIndex
         ..ttsSpeechRate = ttsSpeechRate ?? this.ttsSpeechRate
         ..ttsPitch = ttsPitch ?? this.ttsPitch
-        ..ttsVolume = ttsVolume ?? this.ttsVolume
         ..aiApiKey = aiApiKey ?? this.aiApiKey
         ..aiApiUrl = aiApiUrl ?? this.aiApiUrl
         ..aiModel = aiModel ?? this.aiModel;

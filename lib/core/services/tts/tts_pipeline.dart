@@ -35,7 +35,7 @@ abstract class TtsPipeline {
   Future<void> resume();
   Future<void> stop();
 
-  Future<void> updateVoiceSettings({double? rate, double? pitch, double? volume});
+  Future<void> updateVoiceSettings({double? rate, double? pitch});
 
   void dispose();
 }
