@@ -26,13 +26,16 @@ class ReaderSettingsAdapter extends TypeAdapter<ReaderSettings> {
       ..aiApiKey = fields[8] as String
       ..aiApiUrl = fields[9] as String
       ..aiModel = fields[10] as String
-      ..keepScreenOn = fields[11] as bool? ?? false;
+      ..keepScreenOn = fields[11] as bool
+      ..ttsCorrectionModeIndex = fields[12] as int
+      ..llmBufferChars = fields[13] as int
+      ..llmBatchChars = fields[14] as int;
   }
 
   @override
   void write(BinaryWriter writer, ReaderSettings obj) {
     writer
-      ..writeByte(10)
+      ..writeByte(13)
       ..writeByte(0)
       ..write(obj.fontFamily)
       ..writeByte(1)
@@ -52,7 +55,13 @@ class ReaderSettingsAdapter extends TypeAdapter<ReaderSettings> {
       ..writeByte(10)
       ..write(obj.aiModel)
       ..writeByte(11)
-      ..write(obj.keepScreenOn);
+      ..write(obj.keepScreenOn)
+      ..writeByte(12)
+      ..write(obj.ttsCorrectionModeIndex)
+      ..writeByte(13)
+      ..write(obj.llmBufferChars)
+      ..writeByte(14)
+      ..write(obj.llmBatchChars);
   }
 
   @override

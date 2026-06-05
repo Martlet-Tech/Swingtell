@@ -83,6 +83,10 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     final webview = _webviewKey.currentState;
     final theme = kColorThemes[_vm.settings.colorThemeIndex];
 
+    if (state.error != null && state.error!.isNotEmpty) {
+      _showLLMErrorDialog(state.error!);
+    }
+
     if (!state.isPlaying) {
       webview?.clearHighlight();
       webview?.showTopMask(false, theme.bg);
@@ -187,6 +191,29 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     final visibleText = _vm.lastUserScrollText;
     if (visibleText.isEmpty) return;
     await _vm.seekTtsToVisibleText(visibleText);
+  }
+
+  void _showLLMErrorDialog(String errorMsg) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('AI 纠错失败'),
+        content: Text(errorMsg),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.pushNamed(context, '/settings');
+            },
+            child: const Text('去设置'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

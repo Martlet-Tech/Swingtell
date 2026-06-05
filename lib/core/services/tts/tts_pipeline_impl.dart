@@ -2,12 +2,16 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import '../../models/reader_settings.dart';
+import '../../services/settings_service.dart';
 import 'tts_text_corrector.dart';
 import 'tts_pipeline.dart';
 import 'native_tts.dart';
+import 'llm_correction_worker.dart';
 
 class TtsPipelineImpl implements TtsPipeline {
   final TtsTextCorrector _corrector;
+  final SettingsService _settings;
   FlutterTts? _tts;
   NativeTts? _nativeTts;
   bool _useNative = false;
@@ -24,10 +28,16 @@ class TtsPipelineImpl implements TtsPipeline {
   int _consecutiveErrors = 0;
   int _ttsErrorCount = 0;
   static const int _maxConsecutiveErrors = 3;
-  
 
-  TtsPipelineImpl({TtsTextCorrector? corrector})
-      : _corrector = corrector ?? PassthroughCorrector();
+  // ── LLM 模式专用字段 ──
+  LLMCorrectionWorker? _llmWorker;
+  final List<_LLMParagraph> _llmParagraphs = [];
+
+  TtsPipelineImpl({
+    TtsTextCorrector? corrector,
+    required SettingsService settings,
+  })  : _corrector = corrector ?? PassthroughCorrector(),
+       _settings = settings;
 
   @override
   bool get isPlaying => _playing;
@@ -37,7 +47,6 @@ class TtsPipelineImpl implements TtsPipeline {
 
   @override
   Future<void> init() async {
-    // 策略：先检查 flutter_tts 是否能发现引擎（参考 DeviceTts）
     final tts = FlutterTts();
     dynamic engines;
     try {
@@ -48,14 +57,12 @@ class TtsPipelineImpl implements TtsPipeline {
 
     final engineList = (engines is List ? engines.cast<String>() : <String>[]);
     if (engineList.isNotEmpty) {
-      // flutter_tts 可用
       _tts = tts;
       await _useFlutterTts();
       debugPrint('[TTS] 使用 flutter_tts 引擎');
       return;
     }
 
-    // flutter_tts 失败 → 原生 TTS
     tts.stop();
     debugPrint('[TTS] flutter_tts 不可用，尝试原生 TTS');
     final native = NativeTts();
@@ -170,6 +177,9 @@ class TtsPipelineImpl implements TtsPipeline {
     int paragraphOffset = 0,
   }) async {
     await _ttsStop();
+    _llmWorker?.cancel();
+    _llmWorker = null;
+
     _allChapters = chapterTexts;
     _chapterIndex = chapterIndex;
     _currentUnits = _splitIntoReadingUnits(chapterTexts[chapterIndex]);
@@ -177,6 +187,43 @@ class TtsPipelineImpl implements TtsPipeline {
     _subQueue = [];
     _subIndex = 0;
     _consecutiveErrors = 0;
+    _llmParagraphs.clear();
+
+    final mode = _settings.settings.ttsCorrectionMode;
+
+    if (mode == TtsCorrectionMode.llm) {
+      final apiKey = _settings.settings.aiApiKey;
+      if (apiKey.isEmpty) {
+        _stateController.add(TtsState(
+          isPlaying: false,
+          chapterIndex: chapterIndex,
+          paragraphIndex: paragraphOffset,
+          totalParagraphs: 0,
+          error: '请先在设置中填写 AI API Key',
+        ));
+        return;
+      }
+
+      final remainingText = _buildRemainingText(
+          chapterTexts, chapterIndex, paragraphOffset);
+
+      if (remainingText.isEmpty) {
+        _playing = false;
+        _emitState();
+        return;
+      }
+
+      final s = _settings.settings;
+      _llmWorker = LLMCorrectionWorker(
+        apiKey: apiKey,
+        apiUrl: s.aiApiUrl,
+        model: s.aiModel,
+        batchChars: s.llmBatchChars,
+        maxBufferChunks: (s.llmBufferChars / s.llmBatchChars).ceil() * 2,
+      );
+      _llmWorker!.start(remainingText);
+    }
+
     _playing = true;
     _emitState();
     await _speakCurrent();
@@ -205,6 +252,11 @@ class TtsPipelineImpl implements TtsPipeline {
     _playing = false;
     _unitIndex = 0;
     _consecutiveErrors = 0;
+    _subQueue = [];
+    _subIndex = 0;
+    _llmParagraphs.clear();
+    _llmWorker?.cancel();
+    _llmWorker = null;
     await _ttsStop();
     _emitState();
   }
@@ -220,8 +272,16 @@ class TtsPipelineImpl implements TtsPipeline {
   }
 
   @override
+  Future<void> updateCorrectionMode(TtsCorrectionMode mode) async {
+    if (_playing) return;
+    await _settings.update(_settings.settings.copyWith(ttsCorrectionMode: mode));
+  }
+
+  @override
   void dispose() {
     _disposed = true;
+    _llmWorker?.cancel();
+    _llmWorker = null;
     if (_useNative) {
       _nativeTts?.dispose();
     } else {
@@ -237,6 +297,11 @@ class TtsPipelineImpl implements TtsPipeline {
     if (_consecutiveErrors >= _maxConsecutiveErrors) {
       debugPrint('[TTS] 连续错误超过 $_maxConsecutiveErrors 次，停止朗读');
       await stop();
+      return;
+    }
+
+    if (_llmWorker != null) {
+      await _speakCurrentLLM();
       return;
     }
 
@@ -258,7 +323,6 @@ class TtsPipelineImpl implements TtsPipeline {
     }
 
     // 子队列耗尽，推进到下一个主段落
-    // 跳过空段落（循环，不递归，不会重复推进 _unitIndex）
     while (true) {
       _unitIndex++;
       if (_unitIndex >= _currentUnits.length) {
@@ -275,15 +339,12 @@ class TtsPipelineImpl implements TtsPipeline {
       if (_currentUnits[_unitIndex].trim().isNotEmpty) break;
     }
 
-    // 拆成子队列
     final text = _currentUnits[_unitIndex];
     _subQueue = _safeSplit(text);
     _subIndex = 0;
 
-    // 只在主段落切换时 emit state（驱动 UI 高亮/滚动）
     _emitState();
 
-    // 送出第一个子片段
     final fragment = _subQueue[_subIndex];
     _subIndex++;
     final corrected = await _corrector.correct(fragment);
@@ -298,6 +359,96 @@ class TtsPipelineImpl implements TtsPipeline {
     }
   }
 
+  // ── LLM 模式 ──────────────────────────────────────────
+
+  Future<void> _speakCurrentLLM() async {
+    final buffer = _llmWorker!.buffer;
+
+    if (_subIndex < _subQueue.length) {
+      final fragment = _subQueue[_subIndex];
+      _subIndex++;
+      try {
+        await _ttsSpeak(fragment);
+        _consecutiveErrors = 0;
+        _ttsErrorCount = 0;
+      } catch (e) {
+        _consecutiveErrors++;
+      }
+      return;
+    }
+
+    while (true) {
+      if (buffer.error != null) {
+        _playing = false;
+        _emitStateWithError(buffer.error!);
+        return;
+      }
+
+      _unitIndex++;
+      if (_unitIndex < _llmParagraphs.length) {
+        final p = _llmParagraphs[_unitIndex];
+        if (p.corrected.trim().isEmpty) continue;
+
+        _subQueue = _safeSplit(p.corrected);
+        _subIndex = 0;
+        _emitStateLLM(p.original);
+        break;
+      }
+
+      final chunk = await buffer.take();
+
+      if (buffer.error != null) {
+        _playing = false;
+        _emitStateWithError(buffer.error!);
+        return;
+      }
+
+      if (chunk == null) {
+        _playing = false;
+        _emitState();
+        return;
+      }
+
+      final originalUnits = _splitIntoReadingUnits(chunk.original);
+      final correctedUnits = _splitIntoReadingUnits(chunk.corrected);
+
+      if (originalUnits.length != correctedUnits.length) {
+        debugPrint('[TTS-LLM] WARN: 段落数不匹配 '
+            'original=${originalUnits.length} corrected=${correctedUnits.length}');
+        for (int i = 0; i < originalUnits.length; i++) {
+          _llmParagraphs.add(_LLMParagraph(
+            originalUnits[i],
+            i < correctedUnits.length ? correctedUnits[i] : originalUnits[i],
+          ));
+        }
+      } else {
+        for (int i = 0; i < originalUnits.length; i++) {
+          _llmParagraphs.add(_LLMParagraph(
+            originalUnits[i],
+            correctedUnits[i],
+          ));
+        }
+      }
+
+      while (_unitIndex + 1 < _llmParagraphs.length &&
+             _llmParagraphs[_unitIndex + 1].corrected.trim().isEmpty) {
+        _unitIndex++;
+      }
+    }
+
+    if (_subQueue.isNotEmpty) {
+      final fragment = _subQueue[_subIndex];
+      _subIndex++;
+      try {
+        await _ttsSpeak(fragment);
+        _consecutiveErrors = 0;
+        _ttsErrorCount = 0;
+      } catch (e) {
+        _consecutiveErrors++;
+      }
+    }
+  }
+
   void _speakNext() {
     if (!_playing || _disposed) return;
     _unitIndex++;
@@ -307,14 +458,30 @@ class TtsPipelineImpl implements TtsPipeline {
     _speakCurrent();
   }
 
-  /// 将任意长度的文字拆成不超过 maxLen 字的片段列表
-  /// 优先按标点断句，实在没有标点则硬切
+  // ── 工具方法 ──────────────────────────────────────────
+
+  String _buildRemainingText(
+      List<String> chapterTexts, int chapterIndex, int paragraphOffset) {
+    final buf = StringBuffer();
+
+    for (int ch = chapterIndex; ch < chapterTexts.length; ch++) {
+      final paragraphs = _splitIntoReadingUnits(chapterTexts[ch]);
+      final start = (ch == chapterIndex) ? paragraphOffset : 0;
+
+      for (int i = start; i < paragraphs.length; i++) {
+        if (buf.isNotEmpty) buf.write('\n');
+        buf.write(paragraphs[i]);
+      }
+    }
+
+    return buf.toString();
+  }
+
   List<String> _safeSplit(String text, {int maxLen = 60}) {
     if (text.length <= maxLen) return [text];
 
     final result = <String>[];
 
-    // 第一步：按标点切分，保留标点在前一片段末尾
     final parts = text.split(RegExp(r'(?<=[，。！？；：、,!?;:…])'));
 
     final buffer = StringBuffer();
@@ -329,7 +496,6 @@ class TtsPipelineImpl implements TtsPipeline {
         if (part.length <= maxLen) {
           buffer.write(part);
         } else {
-          // 第二步：硬切
           var remaining = part;
           while (remaining.length > maxLen) {
             result.add(remaining.substring(0, maxLen));
@@ -352,16 +518,48 @@ class TtsPipelineImpl implements TtsPipeline {
         .toList();
   }
 
+  // ── emitState ──────────────────────────────────────────
+
   void _emitState() {
     if (_disposed) return;
+    final unitText = _unitIndex < _currentUnits.length
+        ? _currentUnits[_unitIndex]
+        : '';
     _stateController.add(TtsState(
       isPlaying: _playing,
       chapterIndex: _chapterIndex,
       paragraphIndex: _unitIndex,
       totalParagraphs: _currentUnits.length,
-      currentUnitText: _unitIndex < _currentUnits.length
-          ? _currentUnits[_unitIndex]
-          : '',
+      currentUnitText: unitText,
+    ));
+  }
+
+  void _emitStateLLM(String originalText) {
+    if (_disposed) return;
+    _stateController.add(TtsState(
+      isPlaying: _playing,
+      chapterIndex: _chapterIndex,
+      paragraphIndex: _unitIndex,
+      totalParagraphs: _llmParagraphs.length,
+      currentUnitText: originalText,
+    ));
+  }
+
+  void _emitStateWithError(String msg) {
+    if (_disposed) return;
+    _stateController.add(TtsState(
+      isPlaying: false,
+      chapterIndex: _chapterIndex,
+      paragraphIndex: _unitIndex,
+      totalParagraphs: _llmParagraphs.length,
+      error: msg,
     ));
   }
 }
+
+class _LLMParagraph {
+  final String original;
+  final String corrected;
+  const _LLMParagraph(this.original, this.corrected);
+}
+

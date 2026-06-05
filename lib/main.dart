@@ -26,7 +26,7 @@ void main() async {
   final chatStorageService = ChatStorageService();
   final chatService = ChatService(settingsService);
 
-  final ttsPipeline = TtsPipelineImpl();
+  final ttsPipeline = TtsPipelineImpl(settings: settingsService);
   await ttsPipeline.init();
 
   runApp(

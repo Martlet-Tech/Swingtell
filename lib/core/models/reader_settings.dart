@@ -2,6 +2,11 @@ import 'package:hive/hive.dart';
 
 part 'reader_settings.g.dart';
 
+enum TtsCorrectionMode {
+  local,
+  llm,
+}
+
 @HiveType(typeId: 2)
 class ReaderSettings extends HiveObject {
   @HiveField(0) String fontFamily = 'serif';
@@ -14,6 +19,14 @@ class ReaderSettings extends HiveObject {
   @HiveField(9) String aiApiUrl = 'https://api.openai.com/v1';
   @HiveField(10) String aiModel = 'gpt-4o-mini';
   @HiveField(11) bool keepScreenOn = false;
+  @HiveField(12) int ttsCorrectionModeIndex = 0;
+  @HiveField(13) int llmBufferChars = 1500;
+  @HiveField(14) int llmBatchChars = 500;
+
+  TtsCorrectionMode get ttsCorrectionMode =>
+      TtsCorrectionMode.values[ttsCorrectionModeIndex];
+  set ttsCorrectionMode(TtsCorrectionMode mode) =>
+      ttsCorrectionModeIndex = mode.index;
 
   ReaderSettings copyWith({
     String? fontFamily,
@@ -26,6 +39,9 @@ class ReaderSettings extends HiveObject {
     String? aiApiUrl,
     String? aiModel,
     bool? keepScreenOn,
+    TtsCorrectionMode? ttsCorrectionMode,
+    int? llmBufferChars,
+    int? llmBatchChars,
   }) =>
       ReaderSettings()
         ..fontFamily = fontFamily ?? this.fontFamily
@@ -37,5 +53,8 @@ class ReaderSettings extends HiveObject {
         ..aiApiKey = aiApiKey ?? this.aiApiKey
         ..aiApiUrl = aiApiUrl ?? this.aiApiUrl
         ..aiModel = aiModel ?? this.aiModel
-        ..keepScreenOn = keepScreenOn ?? this.keepScreenOn;
+        ..keepScreenOn = keepScreenOn ?? this.keepScreenOn
+        ..ttsCorrectionMode = ttsCorrectionMode ?? this.ttsCorrectionMode
+        ..llmBufferChars = llmBufferChars ?? this.llmBufferChars
+        ..llmBatchChars = llmBatchChars ?? this.llmBatchChars;
 }
