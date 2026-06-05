@@ -9,6 +9,8 @@ import '../../core/services/progress_service.dart';
 import '../../core/services/settings_service.dart';
 import '../../core/services/tts/tts_pipeline.dart';
 
+enum TtsScrollState { idle, playing, userScrolled }
+
 class ReaderViewModel extends ChangeNotifier {
   final EpubService _epubService;
   final ProgressService _progressService;
@@ -25,16 +27,21 @@ class ReaderViewModel extends ChangeNotifier {
   bool _loading = true;
   TtsState _ttsState = TtsState.idle;
 
+  // 状态机
+  TtsScrollState _scrollState = TtsScrollState.idle;
+  DateTime _lastProgrammaticScroll = DateTime(0);
+  String _lastTtsUnitText = '';
+  String _lastUserScrollText = '';
+
   // 浮动按钮
   bool showFloatButtons = false;
   Timer? _floatButtonTimer;
-  bool _autoScrollEnabled = true;
-  String _lastScrollText = '';
 
   // 由 ReaderScreen 注入的回调
   void Function(String text)? onRestoreScroll;
   void Function(TtsState state)? onTtsStateChanged;
-  void Function(String visibleText)? onPreviewPosition;
+
+  static const _programmaticScrollCooldown = Duration(milliseconds: 1500);
 
   ReaderViewModel({
     required EpubService epubService,
@@ -58,9 +65,9 @@ class ReaderViewModel extends ChangeNotifier {
   ReaderSettings get settings => _settingsService.settings;
   bool get isTtsPlaying => _ttsState.isPlaying;
   TtsState get ttsState => _ttsState;
-  bool get autoScrollEnabled => _autoScrollEnabled;
-  String get lastScrollText => _lastScrollText;
-  void setAutoScroll(bool v) => _autoScrollEnabled = v;
+  TtsScrollState get scrollState => _scrollState;
+  String get lastTtsUnitText => _lastTtsUnitText;
+  String get lastUserScrollText => _lastUserScrollText;
 
   String get _plainText {
     if (_currentChapterIndex >= _chapterTexts.length) return '';
@@ -103,6 +110,9 @@ class ReaderViewModel extends ChangeNotifier {
 
   void _onTtsStateChanged(TtsState state) {
     _ttsState = state;
+    if (state.isPlaying && state.currentUnitText.isNotEmpty) {
+      _lastTtsUnitText = state.currentUnitText;
+    }
     onTtsStateChanged?.call(state);
     if (state.chapterIndex != _currentChapterIndex && state.isPlaying) {
       goToChapter(state.chapterIndex);
@@ -112,13 +122,32 @@ class ReaderViewModel extends ChangeNotifier {
 
   void onScrollSettled(String visibleText) {
     if (visibleText.isEmpty) return;
+
+    final elapsed = DateTime.now().difference(_lastProgrammaticScroll);
+    if (elapsed < _programmaticScrollCooldown) return;
+
+    if (_scrollState == TtsScrollState.playing) {
+      _scrollState = TtsScrollState.userScrolled;
+    }
+
+    _lastUserScrollText = visibleText;
+
     final offset = _findCharOffset(visibleText);
     if (offset >= 0) {
       _progress.charOffset = offset;
       _progress.percentage = _calcPercentage();
       _progressService.saveProgress(_progress);
     }
-    _onUserScroll(visibleText);
+
+    showFloatButtons = false;
+    notifyListeners();
+    _floatButtonTimer?.cancel();
+    _floatButtonTimer = Timer(const Duration(seconds: 1), () {
+      if (_ttsState.isPlaying) {
+        showFloatButtons = true;
+        notifyListeners();
+      }
+    });
   }
 
   void onPageReady() {
@@ -181,6 +210,7 @@ class ReaderViewModel extends ChangeNotifier {
     if (userInitiated) {
       _progressService.saveProgress(_progress);
       _ttsPipeline.stop();
+      _scrollState = TtsScrollState.idle;
     }
     _progress.chapterIndex = index;
     _progress.charOffset = 0;
@@ -192,42 +222,55 @@ class ReaderViewModel extends ChangeNotifier {
   Future<void> toggleTts() async {
     if (_ttsState.isPlaying) {
       await _ttsPipeline.pause();
-    } else {
-      if (_ttsState.paragraphIndex > 0) {
-        await _ttsPipeline.resume();
-      } else {
-        final paraOffset = _progress.charOffset > 0
-            ? _findParagraphAtOffset(_progress.charOffset)
-            : 0;
-        await _ttsPipeline.start(
-          chapterTexts: _chapterTexts,
-          chapterIndex: _currentChapterIndex,
-          paragraphOffset: paraOffset,
-        );
+      _scrollState = TtsScrollState.idle;
+    } else if (_ttsState.paragraphIndex > 0) {
+      _scrollState = TtsScrollState.playing;
+      await _ttsPipeline.resume();
+    }
+  }
+
+  Future<void> startTtsAt(String visibleText) async {
+    _scrollState = TtsScrollState.playing;
+    int paraOffset = 0;
+    if (visibleText.isNotEmpty) {
+      final offset = _findCharOffset(visibleText);
+      if (offset >= 0) {
+        paraOffset = _findParagraphAtOffset(offset);
       }
     }
+    if (paraOffset == 0 && _progress.charOffset > 0) {
+      paraOffset = _findParagraphAtOffset(_progress.charOffset);
+    }
+    await _ttsPipeline.start(
+      chapterTexts: _chapterTexts,
+      chapterIndex: _currentChapterIndex,
+      paragraphOffset: paraOffset,
+    );
   }
 
   Future<void> stopTts() async {
     await _ttsPipeline.stop();
+    _scrollState = TtsScrollState.idle;
   }
 
-  void _onUserScroll(String visibleText) {
-    if (!_ttsState.isPlaying) return;
-    _autoScrollEnabled = false;
-    _lastScrollText = visibleText;
-    onPreviewPosition?.call(visibleText);
-    if (showFloatButtons) {
-      showFloatButtons = false;
-      notifyListeners();
+  void markProgrammaticScroll() {
+    _lastProgrammaticScroll = DateTime.now();
+  }
+
+  void returnToTtsUnit() {
+    if (_scrollState == TtsScrollState.userScrolled) {
+      _scrollState = TtsScrollState.playing;
     }
-    _floatButtonTimer?.cancel();
-    _floatButtonTimer = Timer(const Duration(seconds: 1), () {
-      if (_ttsState.isPlaying) {
-        showFloatButtons = true;
-        notifyListeners();
-      }
-    });
+    showFloatButtons = false;
+    notifyListeners();
+  }
+
+  void startTtsHere() {
+    if (_scrollState == TtsScrollState.userScrolled) {
+      _scrollState = TtsScrollState.playing;
+    }
+    showFloatButtons = false;
+    notifyListeners();
   }
 
   void hideFloatButtons() {

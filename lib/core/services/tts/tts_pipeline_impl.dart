@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'tts_text_corrector.dart';
@@ -13,12 +14,15 @@ class TtsPipelineImpl implements TtsPipeline {
   final _stateController = StreamController<TtsState>.broadcast();
 
   List<String> _allChapters = [];
-  List<String> _currentParagraphs = [];
+  List<String> _currentUnits = [];
   int _chapterIndex = 0;
-  int _paragraphIndex = 0;
+  int _unitIndex = 0;
+  List<String> _subQueue = [];
+  int _subIndex = 0;
   bool _playing = false;
   bool _disposed = false;
   int _consecutiveErrors = 0;
+  int _ttsErrorCount = 0;
   static const int _maxConsecutiveErrors = 3;
   
 
@@ -62,7 +66,7 @@ class TtsPipelineImpl implements TtsPipeline {
       _nativeTts!.events.listen((event) {
         if (event.type == TtsEventType.completed) {
           if (!_playing || _disposed) return;
-          _speakNext();
+          _speakCurrent();
         }
         if (event.type == TtsEventType.error) {
           debugPrint('[TTS] 原生引擎错误: ${event.error}');
@@ -99,12 +103,19 @@ class TtsPipelineImpl implements TtsPipeline {
 
     tts.setCompletionHandler(() {
       if (!_playing || _disposed) return;
-      _speakNext();
+      _speakCurrent();
     });
     tts.setErrorHandler((msg) {
-      debugPrint('[TTS] flutter_tts 错误: $msg');
-      _playing = false;
-      _emitState();
+      debugPrint('[TTS] flutter_tts 错误: $msg | _playing=$_playing _disposed=$_disposed');
+      if (!_playing || _disposed) return;
+      _ttsErrorCount++;
+      if (_ttsErrorCount >= _maxConsecutiveErrors) {
+        debugPrint('[TTS] flutter_tts 连续错误超过 $_maxConsecutiveErrors 次，停止朗读');
+        _playing = false;
+        _emitState();
+        return;
+      }
+      _speakNext();
     });
   }
 
@@ -161,8 +172,10 @@ class TtsPipelineImpl implements TtsPipeline {
     await _ttsStop();
     _allChapters = chapterTexts;
     _chapterIndex = chapterIndex;
-    _currentParagraphs = _splitParagraphs(chapterTexts[chapterIndex]);
-    _paragraphIndex = paragraphOffset;
+    _currentUnits = _splitIntoReadingUnits(chapterTexts[chapterIndex]);
+    _unitIndex = paragraphOffset;
+    _subQueue = [];
+    _subIndex = 0;
     _consecutiveErrors = 0;
     _playing = true;
     _emitState();
@@ -181,6 +194,8 @@ class TtsPipelineImpl implements TtsPipeline {
   Future<void> resume() async {
     if (_playing) return;
     _playing = true;
+    _subQueue = [];
+    _subIndex = 0;
     _emitState();
     await _speakCurrent();
   }
@@ -188,7 +203,7 @@ class TtsPipelineImpl implements TtsPipeline {
   @override
   Future<void> stop() async {
     _playing = false;
-    _paragraphIndex = 0;
+    _unitIndex = 0;
     _consecutiveErrors = 0;
     await _ttsStop();
     _emitState();
@@ -224,44 +239,112 @@ class TtsPipelineImpl implements TtsPipeline {
       await stop();
       return;
     }
-    if (_paragraphIndex >= _currentParagraphs.length) {
-      _chapterIndex++;
-      if (_chapterIndex >= _allChapters.length) {
-        _playing = false;
-        _emitState();
-        return;
-      }
-      _currentParagraphs = _splitParagraphs(_allChapters[_chapterIndex]);
-      _paragraphIndex = 0;
-      _emitState();
-    }
 
-    final rawText = _currentParagraphs[_paragraphIndex];
-    if (rawText.trim().isEmpty) {
-      _paragraphIndex++;
-      await _speakCurrent();
+    // 当前段落的子队列还有剩余，继续送
+    if (_subIndex < _subQueue.length) {
+      final fragment = _subQueue[_subIndex];
+      _subIndex++;
+      final corrected = await _corrector.correct(fragment);
+      debugPrint('[TTS] speak unitIndex=$_unitIndex '
+          'sub=$_subIndex/${_subQueue.length} text="${corrected.substring(0, min(20, corrected.length))}"');
+      try {
+        await _ttsSpeak(corrected);
+        _consecutiveErrors = 0;
+      } catch (e) {
+        _consecutiveErrors++;
+        debugPrint('[TTS] speak() catch: $e');
+      }
       return;
     }
 
-    final correctedText = await _corrector.correct(rawText);
+    // 子队列耗尽，推进到下一个主段落
+    // 跳过空段落（循环，不递归，不会重复推进 _unitIndex）
+    while (true) {
+      _unitIndex++;
+      if (_unitIndex >= _currentUnits.length) {
+        _chapterIndex++;
+        if (_chapterIndex >= _allChapters.length) {
+          _playing = false;
+          _emitState();
+          return;
+        }
+        _currentUnits = _splitIntoReadingUnits(_allChapters[_chapterIndex]);
+        _unitIndex = 0;
+        _emitState();
+      }
+      if (_currentUnits[_unitIndex].trim().isNotEmpty) break;
+    }
+
+    // 拆成子队列
+    final text = _currentUnits[_unitIndex];
+    _subQueue = _safeSplit(text);
+    _subIndex = 0;
+
+    // 只在主段落切换时 emit state（驱动 UI 高亮/滚动）
+    _emitState();
+
+    // 送出第一个子片段
+    final fragment = _subQueue[_subIndex];
+    _subIndex++;
+    final corrected = await _corrector.correct(fragment);
+    debugPrint('[TTS] speak unitIndex=$_unitIndex '
+        'sub=1/${_subQueue.length} text="${corrected.substring(0, min(20, corrected.length))}"');
     try {
+      await _ttsSpeak(corrected);
       _consecutiveErrors = 0;
-      await _ttsSpeak(correctedText);
     } catch (e) {
       _consecutiveErrors++;
-      debugPrint('[TTS] speak() 调用失败 ($_consecutiveErrors次): $e');
-      _speakNext();
+      debugPrint('[TTS] speak() catch: $e');
     }
   }
 
   void _speakNext() {
     if (!_playing || _disposed) return;
-    _paragraphIndex++;
+    _unitIndex++;
+    _subQueue = [];
+    _subIndex = 0;
     _emitState();
     _speakCurrent();
   }
 
-  List<String> _splitParagraphs(String text) {
+  /// 将任意长度的文字拆成不超过 maxLen 字的片段列表
+  /// 优先按标点断句，实在没有标点则硬切
+  List<String> _safeSplit(String text, {int maxLen = 60}) {
+    if (text.length <= maxLen) return [text];
+
+    final result = <String>[];
+
+    // 第一步：按标点切分，保留标点在前一片段末尾
+    final parts = text.split(RegExp(r'(?<=[，。！？；：、,!?;:…])'));
+
+    final buffer = StringBuffer();
+    for (final part in parts) {
+      if (buffer.length + part.length <= maxLen) {
+        buffer.write(part);
+      } else {
+        if (buffer.isNotEmpty) {
+          result.add(buffer.toString());
+          buffer.clear();
+        }
+        if (part.length <= maxLen) {
+          buffer.write(part);
+        } else {
+          // 第二步：硬切
+          var remaining = part;
+          while (remaining.length > maxLen) {
+            result.add(remaining.substring(0, maxLen));
+            remaining = remaining.substring(maxLen);
+          }
+          if (remaining.isNotEmpty) buffer.write(remaining);
+        }
+      }
+    }
+    if (buffer.isNotEmpty) result.add(buffer.toString());
+
+    return result.where((s) => s.trim().isNotEmpty).toList();
+  }
+
+  List<String> _splitIntoReadingUnits(String text) {
     return text
         .split(RegExp(r'\n{1,}'))
         .map((s) => s.trim())
@@ -274,10 +357,10 @@ class TtsPipelineImpl implements TtsPipeline {
     _stateController.add(TtsState(
       isPlaying: _playing,
       chapterIndex: _chapterIndex,
-      paragraphIndex: _paragraphIndex,
-      totalParagraphs: _currentParagraphs.length,
-      currentUnitText: _paragraphIndex < _currentParagraphs.length
-          ? _currentParagraphs[_paragraphIndex]
+      paragraphIndex: _unitIndex,
+      totalParagraphs: _currentUnits.length,
+      currentUnitText: _unitIndex < _currentUnits.length
+          ? _currentUnits[_unitIndex]
           : '',
     ));
   }

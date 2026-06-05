@@ -36,6 +36,7 @@ class ReaderWebviewState extends State<ReaderWebview> {
         },
       )
       ..setNavigationDelegate(NavigationDelegate(
+        onPageStarted: (_) => debugPrint('[WebView] onPageStarted'),
         onPageFinished: (_) => _onPageReady(),
       ));
     _controller.loadHtmlString(widget.chapterHtml);
@@ -53,8 +54,7 @@ class ReaderWebviewState extends State<ReaderWebview> {
 
   Future<void> _onPageReady() async {
     await _injectCss(widget.settings);
-    await _injectScrollListener();
-    await _injectLyricSupport();
+    await _injectTtsFeatures();
     widget.onPageReady?.call();
   }
 
@@ -76,100 +76,55 @@ class ReaderWebviewState extends State<ReaderWebview> {
     await _controller.runJavaScript(
       "document.getElementById('reader-style').textContent = `$css`;",
     );
-    await _updateTopMaskBg(s);
+    final r = (theme.bg.r * 255).round().clamp(0, 255);
+    final g = (theme.bg.g * 255).round().clamp(0, 255);
+    final b = (theme.bg.b * 255).round().clamp(0, 255);
+    await _controller.runJavaScript(
+      "window.showTopMask(false, 'rgb($r,$g,$b)');",
+    );
   }
 
-  Future<void> _injectScrollListener() async {
+  Future<void> _injectTtsFeatures() async {
     await _controller.runJavaScript('''
       (function() {
-        var timer = null;
-        window.addEventListener('scroll', function() {
-          if (window._ttsScrolling) return;
-          if (timer) return;
-          timer = setTimeout(function() {
-            timer = null;
-            var text = typeof window.getFirstVisibleText === 'function'
-              ? window.getFirstVisibleText() : '';
-            ScrollBridge.postMessage(text);
-          }, 500);
-        });
-      })();
-    ''');
-  }
-
-  Future<void> _injectLyricSupport() async {
-    await _controller.runJavaScript('''
-      (function() {
-        window._ttsScrolling = false;
-        document.addEventListener('pointerdown', function() {
-          window._ttsScrolling = false;
-        });
-
-        var mask = document.createElement('div');
-        mask.id = 'top-mask';
-        mask.style.cssText = [
-          'position: fixed',
-          'top: 0', 'left: 0', 'right: 0',
-          'height: 28%',
-          'pointer-events: none',
-          'z-index: 99',
-          'display: none',
-          'background: linear-gradient(to bottom, rgb(248,243,232) 50%, transparent 100%)',
-        ].join(';');
-        document.body.appendChild(mask);
-        document.documentElement.style.setProperty('--bg', 'rgb(248,243,232)');
-
-        window.setLyricMode = function(active, bgColorRgb) {
-          var el = document.getElementById('top-mask');
-          if (!el) return;
-          el.style.display = active ? 'block' : 'none';
-          if (bgColorRgb) {
-            document.documentElement.style.setProperty('--bg', bgColorRgb);
-            el.style.background =
-              'linear-gradient(to bottom, ' + bgColorRgb + ' 50%, transparent 100%)';
-          }
-        };
-
         var _hlEl = null;
-        var _previewEl = null;
 
-        window.trackReadingUnit = function(searchText, lyricMode) {
-          if (!searchText || searchText.length < 3) return;
-          var anchor = searchText.substring(0, Math.min(20, searchText.length));
+        function findElement(anchor) {
+          if (!anchor || anchor.length < 3) return null;
           var walker = document.createTreeWalker(
-            document.body, NodeFilter.SHOW_TEXT, null, false
+            document.body, NodeFilter.SHOW_TEXT, null
           );
-          var targetEl = null, node;
+          var node;
           while ((node = walker.nextNode())) {
             if (node.textContent.indexOf(anchor) !== -1) {
-              targetEl = node.parentElement;
-              break;
+              return node.parentElement;
             }
           }
-          if (!targetEl) return;
+          return null;
+        }
 
-          if (_hlEl && _hlEl !== targetEl) {
+        window.highlightText = function(searchText) {
+          var anchor = searchText.substring(0, Math.min(20, searchText.length));
+          var el = findElement(anchor);
+          if (!el) return;
+          if (_hlEl && _hlEl !== el) {
             _hlEl.style.backgroundColor = '';
             _hlEl.style.borderRadius = '';
           }
-          if (_previewEl) {
-            _previewEl.style.backgroundColor = '';
-            _previewEl.style.borderRadius = '';
-            _previewEl = null;
-          }
-          targetEl.style.backgroundColor = 'rgba(255, 200, 50, 0.35)';
-          targetEl.style.borderRadius = '3px';
-          _hlEl = targetEl;
+          el.style.backgroundColor = 'rgba(255, 200, 50, 0.35)';
+          el.style.borderRadius = '3px';
+          _hlEl = el;
+        };
 
-          if (lyricMode) {
-            window._ttsScrolling = true;
-            var absTop = targetEl.getBoundingClientRect().top + window.scrollY;
-            var targetY = Math.max(0, absTop - window.innerHeight * 0.25);
-            window.scrollTo({ top: targetY, behavior: 'smooth' });
-            setTimeout(function() {
-              if (window._ttsScrolling) window._ttsScrolling = false;
-            }, 600);
-          }
+        window.scrollToAnchor = function(searchText) {
+          var anchor = searchText.substring(0, Math.min(20, searchText.length));
+          var el = findElement(anchor);
+          if (!el) return;
+          var rect = el.getBoundingClientRect();
+          var absoluteTop = rect.top + window.scrollY;
+          var targetScrollY = absoluteTop - window.innerHeight * 0.25;
+          targetScrollY = Math.max(0, targetScrollY);
+          window.scrollTo({ top: targetScrollY, behavior: 'smooth' });
         };
 
         window.clearHighlight = function() {
@@ -178,70 +133,54 @@ class ReaderWebviewState extends State<ReaderWebview> {
             _hlEl.style.borderRadius = '';
             _hlEl = null;
           }
-          window.clearPreview();
-          window.setLyricMode(false);
         };
 
-        window.previewReadingUnit = function(searchText) {
-          if (!searchText || searchText.length < 3) return;
-          var anchor = searchText.substring(0, Math.min(20, searchText.length));
+        window.getFirstVisibleText = function(topFraction) {
+          topFraction = topFraction || 0.33;
+          var targetY = window.scrollY + window.innerHeight * topFraction;
           var walker = document.createTreeWalker(
-            document.body, NodeFilter.SHOW_TEXT, null, false
-          );
-          var targetEl = null, node;
-          while ((node = walker.nextNode())) {
-            if (node.textContent.indexOf(anchor) !== -1) {
-              targetEl = node.parentElement;
-              break;
-            }
-          }
-          if (!targetEl) return;
-
-          if (_previewEl && _previewEl !== targetEl) {
-            _previewEl.style.backgroundColor = '';
-            _previewEl.style.borderRadius = '';
-          }
-          if (targetEl !== _hlEl) {
-            targetEl.style.backgroundColor = 'rgba(255, 200, 50, 0.15)';
-            targetEl.style.borderRadius = '3px';
-          }
-          _previewEl = targetEl;
-        };
-
-        window.clearPreview = function() {
-          if (_previewEl) {
-            _previewEl.style.backgroundColor = '';
-            _previewEl.style.borderRadius = '';
-            _previewEl = null;
-          }
-        };
-
-        window.getFirstVisibleText = function() {
-          var walker = document.createTreeWalker(
-            document.body, NodeFilter.SHOW_TEXT, null, false
+            document.body, NodeFilter.SHOW_TEXT, null
           );
           var node;
           while ((node = walker.nextNode())) {
-            var rect = node.parentElement.getBoundingClientRect();
-            if (rect.top >= 0 && rect.top < window.innerHeight * 0.4) {
-              var t = (node.textContent || '').trim();
-              if (t.length > 5) return t.substring(0, 30);
+            if (node.textContent.trim().length < 5) continue;
+            var el = node.parentElement;
+            if (!el) continue;
+            var rect = el.getBoundingClientRect();
+            var elTop = rect.top + window.scrollY;
+            if (elTop >= targetY - 50) {
+              return node.textContent.trim().substring(0, 30);
             }
           }
           return '';
         };
+
+        var _mask = document.createElement('div');
+        _mask.style.cssText = [
+          'position:fixed', 'top:0', 'left:0', 'right:0',
+          'height:28%', 'pointer-events:none', 'z-index:99', 'display:none'
+        ].join(';');
+        document.body.appendChild(_mask);
+
+        window.showTopMask = function(visible, bgRgb) {
+          if (bgRgb) {
+            _mask.style.background =
+              'linear-gradient(to bottom, ' + bgRgb + ' 50%, transparent 100%)';
+          }
+          _mask.style.display = visible ? 'block' : 'none';
+        };
+
+        var _scrollTimer = null;
+        window.addEventListener('scroll', function() {
+          if (_scrollTimer) clearTimeout(_scrollTimer);
+          _scrollTimer = setTimeout(function() {
+            _scrollTimer = null;
+            var text = window.getFirstVisibleText(0.1);
+            ScrollBridge.postMessage(text);
+          }, 500);
+        });
       })();
     ''');
-  }
-
-  Future<void> _updateTopMaskBg(ReaderSettings s) async {
-    final theme = kColorThemes[s.colorThemeIndex];
-    final r = (theme.bg.r * 255).round().clamp(0, 255);
-    final g = (theme.bg.g * 255).round().clamp(0, 255);
-    final b = (theme.bg.b * 255).round().clamp(0, 255);
-    await _controller.runJavaScript(
-      "window.setLyricMode(false, 'rgb($r,$g,$b)');",
-    );
   }
 
   // ── Public methods ─────────────────────────────────
@@ -250,32 +189,7 @@ class ReaderWebviewState extends State<ReaderWebview> {
     await _injectCss(s);
   }
 
-  Future<void> scrollToText(String text) async {
-    if (text.isEmpty) return;
-    final safe = text
-        .substring(0, text.length > 20 ? 20 : text.length)
-        .replaceAll('\\', '\\\\')
-        .replaceAll("'", "\\'")
-        .replaceAll('\n', ' ');
-    await _controller.runJavaScript('''
-      (function() {
-        var anchor = '$safe';
-        var walker = document.createTreeWalker(
-          document.body, NodeFilter.SHOW_TEXT, null, false
-        );
-        var node;
-        while ((node = walker.nextNode())) {
-          if (node.textContent.indexOf(anchor) !== -1) {
-            var rect = node.parentElement.getBoundingClientRect();
-            window.scrollTo(0, Math.max(0, rect.top + window.scrollY - window.innerHeight * 0.25));
-            return;
-          }
-        }
-      })();
-    ''');
-  }
-
-  Future<void> trackReadingUnit(String text, {bool lyricMode = false}) async {
+  Future<void> highlightText(String text) async {
     if (text.isEmpty) return;
     final safe = text
         .substring(0, text.length > 20 ? 20 : text.length)
@@ -283,17 +197,19 @@ class ReaderWebviewState extends State<ReaderWebview> {
         .replaceAll("'", "\\'")
         .replaceAll('\n', ' ');
     await _controller.runJavaScript(
-      "window.trackReadingUnit('$safe', $lyricMode);",
+      "window.highlightText('$safe');",
     );
   }
 
-  Future<void> setLyricMode(bool active) async {
-    final theme = kColorThemes[widget.settings.colorThemeIndex];
-    final r = (theme.bg.r * 255).round().clamp(0, 255);
-    final g = (theme.bg.g * 255).round().clamp(0, 255);
-    final b = (theme.bg.b * 255).round().clamp(0, 255);
+  Future<void> scrollToAnchor(String text) async {
+    if (text.isEmpty) return;
+    final safe = text
+        .substring(0, text.length > 20 ? 20 : text.length)
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", "\\'")
+        .replaceAll('\n', ' ');
     await _controller.runJavaScript(
-      "window.setLyricMode($active, 'rgb($r,$g,$b)');",
+      "window.scrollToAnchor('$safe');",
     );
   }
 
@@ -301,27 +217,20 @@ class ReaderWebviewState extends State<ReaderWebview> {
     await _controller.runJavaScript('window.clearHighlight();');
   }
 
-  Future<String> getFirstVisibleText() async {
+  Future<String> getFirstVisibleText({double topFraction = 0.33}) async {
     final result = await _controller.runJavaScriptReturningResult(
-      'window.getFirstVisibleText()',
+      'window.getFirstVisibleText($topFraction)',
     );
     return result.toString();
   }
 
-  Future<void> previewReadingUnit(String text) async {
-    if (text.isEmpty) return;
-    final safe = text
-        .substring(0, text.length > 20 ? 20 : text.length)
-        .replaceAll('\\', '\\\\')
-        .replaceAll("'", "\\'")
-        .replaceAll('\n', ' ');
+  Future<void> showTopMask(bool visible, Color bgColor) async {
+    final r = (bgColor.r * 255).round().clamp(0, 255);
+    final g = (bgColor.g * 255).round().clamp(0, 255);
+    final b = (bgColor.b * 255).round().clamp(0, 255);
     await _controller.runJavaScript(
-      "window.previewReadingUnit('$safe');",
+      "window.showTopMask($visible, 'rgb($r,$g,$b)');",
     );
-  }
-
-  Future<void> clearPreview() async {
-    await _controller.runJavaScript('window.clearPreview();');
   }
 
   @override

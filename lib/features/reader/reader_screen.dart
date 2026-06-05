@@ -30,9 +30,6 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   late SettingsService _settingsService;
   final _webviewKey = GlobalKey<ReaderWebviewState>();
   bool _barsVisible = false;
-  bool _prevTtsPlaying = false;
-  bool _ttsPausing = false;
-  String _lastTrackedText = '';
 
   @override
   void initState() {
@@ -48,10 +45,9 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     );
     _vm.onTtsStateChanged = _onTtsStateChanged;
     _vm.onRestoreScroll = (text) {
-      _webviewKey.currentState?.scrollToText(text);
-    };
-    _vm.onPreviewPosition = (text) {
-      _webviewKey.currentState?.previewReadingUnit(text);
+      final webview = _webviewKey.currentState;
+      webview?.scrollToAnchor(text);
+      _vm.markProgrammaticScroll();
     };
     _vm.init();
     _syncWakelock();
@@ -85,31 +81,38 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
 
   void _onTtsStateChanged(TtsState state) {
     final webview = _webviewKey.currentState;
+    final theme = kColorThemes[_vm.settings.colorThemeIndex];
 
-    if (state.isPlaying && !_prevTtsPlaying) {
-      webview?.setLyricMode(true);
+    if (!state.isPlaying) {
+      webview?.clearHighlight();
+      webview?.showTopMask(false, theme.bg);
+      return;
     }
-    if (!state.isPlaying && _prevTtsPlaying) {
-      if (_ttsPausing) {
-        webview?.setLyricMode(false);
-        _ttsPausing = false;
-      } else {
-        webview?.clearHighlight();
-      }
-    }
-    _prevTtsPlaying = state.isPlaying;
+    if (state.currentUnitText.isEmpty) return;
 
-    if (state.isPlaying &&
-        state.currentUnitText.isNotEmpty &&
-        state.currentUnitText != _lastTrackedText) {
-      _lastTrackedText = state.currentUnitText;
-      webview?.trackReadingUnit(state.currentUnitText, lyricMode: _vm.autoScrollEnabled);
+    webview?.showTopMask(true, theme.bg);
+
+    if (_vm.scrollState == TtsScrollState.playing) {
+      webview?.highlightText(state.currentUnitText);
+      webview?.scrollToAnchor(state.currentUnitText);
+      _vm.markProgrammaticScroll();
     }
   }
 
-  void _onTtsPlay() {
-    if (_vm.isTtsPlaying) _ttsPausing = true;
-    _vm.toggleTts();
+  Future<void> _onTtsPlay() async {
+    final webview = _webviewKey.currentState;
+    final theme = kColorThemes[_vm.settings.colorThemeIndex];
+
+    if (_vm.isTtsPlaying) {
+      _vm.toggleTts();
+      webview?.showTopMask(false, theme.bg);
+    } else if (_vm.ttsState.paragraphIndex > 0) {
+      _vm.toggleTts();
+    } else {
+      final visibleText =
+          await webview?.getFirstVisibleText(topFraction: 0.33) ?? '';
+      await _vm.startTtsAt(visibleText);
+    }
   }
 
   void _toggleBars() {
@@ -171,19 +174,17 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   void _onReturnToTts() {
     final webview = _webviewKey.currentState;
     if (webview == null) return;
-    _vm.setAutoScroll(true);
-    _vm.hideFloatButtons();
-    webview.clearPreview();
-    webview.trackReadingUnit(_lastTrackedText, lyricMode: true);
+    _vm.returnToTtsUnit();
+    webview.highlightText(_vm.lastTtsUnitText);
+    webview.scrollToAnchor(_vm.lastTtsUnitText);
+    _vm.markProgrammaticScroll();
   }
 
   Future<void> _onStartTtsHere() async {
     final webview = _webviewKey.currentState;
     if (webview == null) return;
-    _vm.setAutoScroll(true);
-    _vm.hideFloatButtons();
-    webview.clearPreview();
-    final visibleText = _vm.lastScrollText;
+    _vm.startTtsHere();
+    final visibleText = _vm.lastUserScrollText;
     if (visibleText.isEmpty) return;
     await _vm.seekTtsToVisibleText(visibleText);
   }
