@@ -10,20 +10,10 @@ class GestureLayer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          flex: 1,
-          child: GestureDetector(onTap: onTapCenter),
-        ),
-        Expanded(
-          flex: 2,
-          child: IgnorePointer(
-            ignoring: false,
-            child: Container(),
-          ),
-        ),
-      ],
+    return GestureDetector(
+      onTap: onTapCenter,
+      behavior: HitTestBehavior.translucent,
+      child: const SizedBox.expand(),
     );
   }
 }
