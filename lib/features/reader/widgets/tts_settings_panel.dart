@@ -54,16 +54,30 @@ class TtsSettingsPanel extends StatelessWidget {
               _updateSettings(settingsService, s, ttsPitch: pitch);
             },
           ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('保持不息屏', style: TextStyle(fontSize: 14)),
+              const Spacer(),
+              Switch(
+                value: s.keepScreenOn,
+                onChanged: (v) {
+                  _updateSettings(settingsService, s, keepScreenOn: v);
+                },
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 
   void _updateSettings(SettingsService svc, ReaderSettings current,
-      {double? ttsSpeechRate, double? ttsPitch}) {
+      {double? ttsSpeechRate, double? ttsPitch, bool? keepScreenOn}) {
     svc.update(current.copyWith(
       ttsSpeechRate: ttsSpeechRate,
       ttsPitch: ttsPitch,
+      keepScreenOn: keepScreenOn,
     ));
   }
 }

@@ -74,6 +74,9 @@ dependencies:
   http: ^1.2.0
   archive: ^3.4.0
 
+  # 保持不息屏
+  wakelock_plus: ^1.5.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

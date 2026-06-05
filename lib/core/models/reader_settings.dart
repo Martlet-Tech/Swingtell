@@ -13,6 +13,7 @@ class ReaderSettings extends HiveObject {
   @HiveField(8) String aiApiKey = '';
   @HiveField(9) String aiApiUrl = 'https://api.openai.com/v1';
   @HiveField(10) String aiModel = 'gpt-4o-mini';
+  @HiveField(11) bool keepScreenOn = false;
 
   ReaderSettings copyWith({
     String? fontFamily,
@@ -24,6 +25,7 @@ class ReaderSettings extends HiveObject {
     String? aiApiKey,
     String? aiApiUrl,
     String? aiModel,
+    bool? keepScreenOn,
   }) =>
       ReaderSettings()
         ..fontFamily = fontFamily ?? this.fontFamily
@@ -34,5 +36,6 @@ class ReaderSettings extends HiveObject {
         ..ttsPitch = ttsPitch ?? this.ttsPitch
         ..aiApiKey = aiApiKey ?? this.aiApiKey
         ..aiApiUrl = aiApiUrl ?? this.aiApiUrl
-        ..aiModel = aiModel ?? this.aiModel;
+        ..aiModel = aiModel ?? this.aiModel
+        ..keepScreenOn = keepScreenOn ?? this.keepScreenOn;
 }

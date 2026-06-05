@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../core/models/book.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/services/epub_service.dart';
@@ -53,14 +54,26 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
       _webviewKey.currentState?.previewReadingUnit(text);
     };
     _vm.init();
+    _syncWakelock();
+    _settingsService.addListener(_syncWakelock);
   }
 
   @override
   void dispose() {
+    _settingsService.removeListener(_syncWakelock);
+    WakelockPlus.disable();
     WidgetsBinding.instance.removeObserver(this);
     _vm.onAppPause();
     _vm.dispose();
     super.dispose();
+  }
+
+  void _syncWakelock() {
+    if (_settingsService.settings.keepScreenOn) {
+      WakelockPlus.enable();
+    } else {
+      WakelockPlus.disable();
+    }
   }
 
   @override
