@@ -323,8 +323,11 @@ class TtsPipelineImpl implements TtsPipeline {
     }
 
     // 子队列耗尽，推进到下一个主段落
-    while (true) {
+    // 首次进入（start/resume 时子队列从未消费过），停留在当前段落不跳过
+    if (_subIndex > 0) {
       _unitIndex++;
+    }
+    while (true) {
       if (_unitIndex >= _currentUnits.length) {
         _chapterIndex++;
         if (_chapterIndex >= _allChapters.length) {
@@ -337,6 +340,7 @@ class TtsPipelineImpl implements TtsPipeline {
         _emitState();
       }
       if (_currentUnits[_unitIndex].trim().isNotEmpty) break;
+      _unitIndex++;
     }
 
     final text = _currentUnits[_unitIndex];
