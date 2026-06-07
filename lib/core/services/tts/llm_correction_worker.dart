@@ -1,7 +1,31 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'correction_ring_buffer.dart';
+
+const _kPolyphonic = {
+  '行','长','重','了','着','还','为','都','没','乐','好','教','觉','朝',
+  '藏','差','传','调','发','分','给','供','假','间','将','角','结',
+  '量','率','难','强','曲','数','相','应','与','中','种','转','倒',
+  '当','的','得','地','只','奇','切','兴','更','少','大','背','奔','便',
+  '别','泊','参','曾','称','乘','处','创','从','斗','度','肚',
+  '恶','否','佛','父','勾','观','冠','龟','哈','汗','荷',
+  '核','横','虹','糊','华','划','会','混','纪','系','夹','贾',
+  '监','渐','藉','禁','劲','据','卷','看','壳','空','括','拉','烙',
+  '勒','擂','累','俩','撩','淋','令','溜','馏','陆','捋','落',
+  '埋','脉','氓','蒙','秘','模','磨','抹','那','溺','拧','宁','弄',
+  '排','迫','仆','铺','曝','栖','蹊','翘','亲','苘','区',
+  '圈','任','散','丧','扫','色','刹','扇','上','舍','摄','甚',
+  '省','识','食','氏','熟','属','术','刷','衰','拴','说','似','松',
+  '宿','遂','踏','苔','趟','提','体','挑','帖','通','同','吐','褪','拓',
+  '瓦','委','尾','尉','遗','蔚','文','窝','乌','无','洗','吓','鲜',
+  '巷','削','校','血','熏','压','哑','咽','殷','饮','佣','拥',
+  '吁','於','予','雨','语','员','轧','炸','栅','粘','占','涨',
+  '正','症','挣','殖','指','质','轴','著','幢',
+  '琢','仔','作','坐',
+};
 
 class LLMCorrectionWorker {
   final String apiKey;
@@ -11,6 +35,7 @@ class LLMCorrectionWorker {
   final CorrectionRingBuffer buffer;
 
   bool _cancelled = false;
+  String _context = '';
 
   LLMCorrectionWorker({
     required this.apiKey,
@@ -20,8 +45,10 @@ class LLMCorrectionWorker {
     int maxBufferChunks = 6,
   }) : buffer = CorrectionRingBuffer(maxChunks: maxBufferChunks);
 
-  void start(String remainingText) {
+  void start(String remainingText, {String context = ''}) {
     _cancelled = false;
+    _context = context;
+    debugPrint('[TTS-LLM] worker start, textLen=${remainingText.length} batchChars=$batchChars${context.isNotEmpty ? ' ctx=$context' : ''}');
     _run(remainingText);
   }
 
@@ -37,13 +64,22 @@ class LLMCorrectionWorker {
       final rawChunk = _smartChunk(text, pos, batchChars);
       if (rawChunk.isEmpty) break;
       pos += rawChunk.length;
+      debugPrint('[TTS-LLM] chunk ${pos}/${text.length} rawLen=${rawChunk.length}');
 
       String corrected;
-      try {
-        corrected = await _callLLM(rawChunk);
-      } catch (e) {
-        buffer.setError('LLM 纠错失败: $e');
-        return;
+      if (!_containsPolyphonic(rawChunk)) {
+        corrected = rawChunk;
+        debugPrint('[TTS-LLM] passthrough (no polyphonic chars)');
+      } else {
+        try {
+          corrected = await _callLLM(rawChunk);
+          final diff = _diffHighlight(rawChunk, corrected);
+          debugPrint('[TTS-LLM] LLM OK, correctedLen=${corrected.length} diff=$diff');
+        } catch (e) {
+          debugPrint('[TTS-LLM] LLM FAIL: $e');
+          buffer.setError('LLM 纠错失败: $e');
+          return;
+        }
       }
 
       buffer.add(CorrectedChunk(rawChunk, corrected));
@@ -53,6 +89,7 @@ class LLMCorrectionWorker {
       }
     }
 
+    debugPrint('[TTS-LLM] worker done, cancelled=$_cancelled');
     buffer.close();
   }
 
@@ -77,19 +114,30 @@ class LLMCorrectionWorker {
     return text.substring(start, end);
   }
 
+  bool _containsPolyphonic(String text) {
+    for (int i = 0; i < text.length; i++) {
+      if (_kPolyphonic.contains(text[i])) return true;
+    }
+    return false;
+  }
+
   Future<String> _callLLM(String rawText) async {
+    final sysPrompt = _context.isNotEmpty
+        ? '$_systemPrompt\n当前文段出自$_context。'
+        : _systemPrompt;
     final request = http.Request('POST', Uri.parse('$apiUrl/chat/completions'));
     request.headers['Authorization'] = 'Bearer $apiKey';
     request.headers['Content-Type'] = 'application/json';
     request.body = jsonEncode({
       'model': model,
       'messages': [
-        {'role': 'system', 'content': _systemPrompt},
+        {'role': 'system', 'content': sysPrompt},
         {'role': 'user', 'content': '请将以下中文文本中的多音字替换为同音单音字：\n\n$rawText'},
       ],
       'stream': false,
       'temperature': 0.0,
       'max_tokens': 4096,
+      'thinking': {'type': 'disabled'},
     });
 
     for (int retry = 0; retry < 3; retry++) {
@@ -98,6 +146,9 @@ class LLMCorrectionWorker {
             .send(request)
             .timeout(const Duration(seconds: 30));
         final response = await http.Response.fromStream(streamed);
+        debugPrint('[TTS-LLM] API raw: status=${response.statusCode} '
+            'bodyLen=${response.body.length} '
+            'body="${response.body.substring(0, min(200, response.body.length))}"');
 
         if (response.statusCode != 200) {
           throw Exception('API ${response.statusCode}');
@@ -115,12 +166,25 @@ class LLMCorrectionWorker {
     throw Exception('重试耗尽');
   }
 
+  String _diffHighlight(String original, String corrected) {
+    final buf = StringBuffer();
+    final len = min(original.length, corrected.length);
+    for (int i = 0; i < len; i++) {
+      if (original[i] != corrected[i]) {
+        buf.write('[$i:${original[i]}→${corrected[i]}]');
+        if (buf.length > 250) { buf.write('...'); break; }
+      }
+    }
+    if (buf.isEmpty) buf.write('(无变化)');
+    return buf.toString();
+  }
+
   static const _systemPrompt = '''
 你是一个中文 TTS 预处理助手。你的任务是将用户提供的中文文本中的多音字替换为同音单音字，
 使 TTS 引擎朗读时不会出现多音字读错的情况。
 
 严格规则：
-1. 只替换多音字，其他字符原样保留
+1. 只替换多音字，其他字符原样保留。非多音字严禁改动。
 2. 替换后的字必须与原字发音相同（在目标语境下）
 3. 保持所有标点符号、换行符（\n）不变
 4. 不要增删任何字符，总字数必须严格相等

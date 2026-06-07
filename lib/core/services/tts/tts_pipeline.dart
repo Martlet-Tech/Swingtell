@@ -35,6 +35,7 @@ abstract class TtsPipeline {
     required List<String> chapterTexts,
     required int chapterIndex,
     int paragraphOffset = 0,
+    String chapterContext = '',
   });
 
   Future<void> pause();

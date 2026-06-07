@@ -21,7 +21,8 @@ class TtsSettingsPanel extends StatelessWidget {
         color: theme.barBg,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      child: Column(
+      child: SingleChildScrollView(
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -136,6 +137,7 @@ class TtsSettingsPanel extends StatelessWidget {
             ),
           ],
         ],
+      ),
       ),
     );
   }

@@ -37,6 +37,8 @@ class ReaderViewModel extends ChangeNotifier {
   bool showFloatButtons = false;
   Timer? _floatButtonTimer;
 
+  StreamSubscription<TtsState>? _ttsStateSub;
+
   // 由 ReaderScreen 注入的回调
   void Function(String text)? onRestoreScroll;
   void Function(TtsState state)? onTtsStateChanged;
@@ -95,7 +97,7 @@ class ReaderViewModel extends ChangeNotifier {
       _currentHtml = _chapters.isNotEmpty ? _chapters[_currentChapterIndex] : null;
 
       _settingsService.addListener(_onSettingsChanged);
-      _ttsPipeline.stateStream.listen(_onTtsStateChanged);
+      _ttsStateSub = _ttsPipeline.stateStream.listen(_onTtsStateChanged);
     } catch (e) {
       debugPrint('[ReaderVM] init error: $e');
     } finally {
@@ -241,10 +243,15 @@ class ReaderViewModel extends ChangeNotifier {
     if (paraOffset == 0 && _progress.charOffset > 0) {
       paraOffset = _findParagraphAtOffset(_progress.charOffset);
     }
+    final chapterTitle = _currentChapterIndex < _chapterTitles.length
+        ? _chapterTitles[_currentChapterIndex]
+        : '';
+    final ctx = '《${_book.title}》${chapterTitle.isNotEmpty ? " $chapterTitle" : ""}';
     await _ttsPipeline.start(
       chapterTexts: _chapterTexts,
       chapterIndex: _currentChapterIndex,
       paragraphOffset: paraOffset,
+      chapterContext: ctx,
     );
   }
 
@@ -314,6 +321,7 @@ class ReaderViewModel extends ChangeNotifier {
   void dispose() {
     _settingsService.removeListener(_onSettingsChanged);
     _floatButtonTimer?.cancel();
+    _ttsStateSub?.cancel();
     super.dispose();
   }
 }
