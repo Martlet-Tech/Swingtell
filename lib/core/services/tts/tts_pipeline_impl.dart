@@ -32,6 +32,7 @@ class TtsPipelineImpl implements TtsPipeline {
   // ── LLM 模式专用字段 ──
   LLMCorrectionWorker? _llmWorker;
   final List<_LLMParagraph> _llmParagraphs = [];
+  int _llmChapterEnd = 0;
 
   TtsPipelineImpl({
     TtsTextCorrector? corrector,
@@ -175,6 +176,7 @@ class TtsPipelineImpl implements TtsPipeline {
     required List<String> chapterTexts,
     required int chapterIndex,
     int paragraphOffset = 0,
+    String chapterContext = '',
   }) async {
     await _ttsStop();
     _llmWorker?.cancel();
@@ -221,11 +223,15 @@ class TtsPipelineImpl implements TtsPipeline {
         batchChars: s.llmBatchChars,
         maxBufferChunks: (s.llmBufferChars / s.llmBatchChars).ceil() * 2,
       );
-      _llmWorker!.start(remainingText);
+      _llmWorker!.start(remainingText, context: chapterContext);
+      _llmChapterEnd = _currentUnits.length - paragraphOffset;
     }
 
     _playing = true;
     _emitState();
+    if (_llmWorker != null) {
+      _unitIndex = 0;
+    }
     await _speakCurrent();
   }
 
@@ -367,47 +373,66 @@ class TtsPipelineImpl implements TtsPipeline {
 
   Future<void> _speakCurrentLLM() async {
     final buffer = _llmWorker!.buffer;
+    debugPrint('[TTS-LLM] _speakCurrentLLM enter playing=$_playing '
+        'subIdx=$_subIndex subQLen=${_subQueue.length} '
+        'unitIdx=$_unitIndex llmParas=${_llmParagraphs.length}');
 
     if (_subIndex < _subQueue.length) {
       final fragment = _subQueue[_subIndex];
       _subIndex++;
+      debugPrint('[TTS-LLM] speak subFrag idx=$_subIndex/${_subQueue.length} '
+          'text="${fragment.substring(0, min(20, fragment.length))}"');
       try {
         await _ttsSpeak(fragment);
         _consecutiveErrors = 0;
         _ttsErrorCount = 0;
       } catch (e) {
         _consecutiveErrors++;
+        debugPrint('[TTS-LLM] speak catch: $e');
       }
       return;
     }
 
     while (true) {
       if (buffer.error != null) {
+        debugPrint('[TTS-LLM] buffer error: ${buffer.error}');
         _playing = false;
         _emitStateWithError(buffer.error!);
         return;
       }
 
-      _unitIndex++;
       if (_unitIndex < _llmParagraphs.length) {
         final p = _llmParagraphs[_unitIndex];
-        if (p.corrected.trim().isEmpty) continue;
+        if (p.corrected.trim().isEmpty) {
+          _unitIndex++;
+          _advanceLLMChapter();
+          debugPrint('[TTS-LLM] skip empty para $_unitIndex');
+          continue;
+        }
 
         _subQueue = _safeSplit(p.corrected);
         _subIndex = 0;
+        debugPrint('[TTS-LLM] read para $_unitIndex '
+            'subQ=${_subQueue.length} text="${p.original.substring(0, min(30, p.original.length))}"');
+        _unitIndex++;
+        _advanceLLMChapter();
         _emitStateLLM(p.original);
         break;
       }
 
+      debugPrint('[TTS-LLM] wait buffer... unitIdx=$_unitIndex llmParas=${_llmParagraphs.length}');
       final chunk = await buffer.take();
+      debugPrint('[TTS-LLM] buffer got chunk=$chunk');
 
       if (buffer.error != null) {
+        debugPrint('[TTS-LLM] buffer error after take: ${buffer.error}');
         _playing = false;
         _emitStateWithError(buffer.error!);
         return;
       }
 
       if (chunk == null) {
+        debugPrint('[TTS-LLM] buffer closed, no more chunks');
         _playing = false;
         _emitState();
         return;
@@ -415,6 +440,8 @@ class TtsPipelineImpl implements TtsPipeline {
 
       final originalUnits = _splitIntoReadingUnits(chunk.original);
       final correctedUnits = _splitIntoReadingUnits(chunk.corrected);
+
+      debugPrint('[TTS-LLM] chunk processed: orig=${originalUnits.length} corr=${correctedUnits.length}');
 
       if (originalUnits.length != correctedUnits.length) {
         debugPrint('[TTS-LLM] WARN: 段落数不匹配 '
@@ -433,24 +460,29 @@ class TtsPipelineImpl implements TtsPipeline {
           ));
         }
       }
-
-      while (_unitIndex + 1 < _llmParagraphs.length &&
-             _llmParagraphs[_unitIndex + 1].corrected.trim().isEmpty) {
-        _unitIndex++;
-      }
     }
 
     if (_subQueue.isNotEmpty) {
       final fragment = _subQueue[_subIndex];
       _subIndex++;
+      debugPrint('[TTS-LLM] speak first frag text="${fragment.substring(0, min(20, fragment.length))}"');
       try {
         await _ttsSpeak(fragment);
         _consecutiveErrors = 0;
         _ttsErrorCount = 0;
       } catch (e) {
         _consecutiveErrors++;
+        debugPrint('[TTS-LLM] speak first frag catch: $e');
       }
     }
+  }
+
+  void _advanceLLMChapter() {
+    if (_unitIndex < _llmChapterEnd) return;
+    if (_chapterIndex + 1 >= _allChapters.length) return;
+    _chapterIndex++;
+    _currentUnits = _splitIntoReadingUnits(_allChapters[_chapterIndex]);
+    _llmChapterEnd += _currentUnits.length;
   }
 
   void _speakNext() {
