@@ -293,7 +293,10 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                   onScroll: _vm.onScrollSettled,
                   onPageReady: _vm.onPageReady,
                 ),
-                GestureLayer(onTapCenter: _toggleBars),
+                GestureLayer(
+                  onTapCenter: _toggleBars,
+                  onDoubleTap: _onTtsPlay,
+                ),
                 if (_vm.showFloatButtons)
                   Positioned(
                     bottom: 80,
