@@ -88,6 +88,30 @@ class ReaderViewModel extends ChangeNotifier {
         .toList();
   }
 
+  /// 获取选中文字往前推 1 个段落的上下文（纯 Dart 逻辑，不依赖 JS）
+  String getPreviousParagraph(String selectedText) {
+    if (selectedText.isEmpty) return '';
+    final text = _plainText;
+    if (text.isEmpty) return '';
+    final idx = text.indexOf(selectedText);
+    if (idx <= 0) return '';
+
+    // 找到选中文字前的段落起始
+    final beforeIdx = idx - 1;
+    var paraStart = text.lastIndexOf('\n', beforeIdx);
+    if (paraStart == -1) paraStart = 0;
+    else paraStart += 1;
+
+    if (paraStart == 0) return '';
+
+    // 再往前推一段
+    var prevParaStart = text.lastIndexOf('\n', paraStart - 2);
+    if (prevParaStart == -1) prevParaStart = 0;
+    else prevParaStart += 1;
+
+    return text.substring(prevParaStart, paraStart).trim();
+  }
+
   Future<void> init() async {
     try {
       _chapters = await _epubService.extractChapters(_book.filePath);

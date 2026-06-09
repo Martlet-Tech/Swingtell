@@ -1,5 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:http/http.dart' as http;
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../core/models/book.dart';
 import '../../core/constants/app_constants.dart';
@@ -11,11 +14,11 @@ import 'reader_viewmodel.dart';
 import 'widgets/reader_webview.dart';
 import 'widgets/reader_top_bar.dart';
 import 'widgets/reader_bottom_bar.dart';
-import 'widgets/gesture_layer.dart';
 import 'widgets/chapter_list_sheet.dart';
 import 'widgets/color_theme_popup.dart';
 import 'widgets/font_settings_popup.dart';
 import 'widgets/tts_settings_panel.dart';
+import 'widgets/text_selection_popup.dart';
 
 class ReaderScreen extends StatefulWidget {
   final Book book;
@@ -25,12 +28,21 @@ class ReaderScreen extends StatefulWidget {
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver {
+class _ReaderScreenState extends State<ReaderScreen>
+    with WidgetsBindingObserver {
   late ReaderViewModel _vm;
   late SettingsService _settingsService;
   final _webviewKey = GlobalKey<ReaderWebviewState>();
   bool _barsVisible = false;
   bool _showChapterPanel = false;
+
+  // ── 文字选择 / AI 解释状态 ──
+  bool _selectionMode = false;
+  String _selectedText = '';
+  double _selectionTop = 0;
+  double _selectionLeft = 20;
+  bool _showSelectionPopup = false;
+  bool _explaining = false;
 
   @override
   void initState() {
@@ -125,6 +137,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   }
 
   Future<void> _onBack() async {
+    _exitSelectionMode();
     _vm.onAppPause();
     if (_vm.isTtsPlaying) {
       final result = await showDialog<String>(
@@ -151,9 +164,8 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
       if (result == 'stop') {
         await _vm.stopTts();
       } else if (result == 'cancel' || result == null) {
-        return; // 取消，留在当前页
+        return;
       }
-      // result == 'continue': 保持 TTS 播放，返回书架
     }
     if (mounted) Navigator.pop(context);
   }
@@ -239,6 +251,196 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     );
   }
 
+  // ── 文字选择 / AI 解释 ─────────────────────────────
+
+  /// WebView SelectionBridge 回调
+  void _onSelectionChanged(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final type = data['type'] as String?;
+    if (type == 'clear') {
+      setState(() {
+        _showSelectionPopup = false;
+        _selectedText = '';
+      });
+    } else if (type == 'selection') {
+      final text = data['text'] as String? ?? '';
+      final top = (data['top'] as num?)?.toDouble() ?? 0;
+      final left = (data['left'] as num?)?.toDouble() ?? 20;
+      if (text.isNotEmpty) {
+        if (!_selectionMode) {
+          if (_vm.isTtsPlaying) {
+            _vm.toggleTts();
+          }
+          _selectionMode = true;
+        }
+        setState(() {
+          _selectedText = text;
+          _selectionTop = top;
+          _selectionLeft = left;
+          _showSelectionPopup = true;
+        });
+      }
+    }
+  }
+
+  double _calculatePopupTop(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
+    if (_selectionTop < screenHeight * 0.4) {
+      return (_selectionTop + 30).clamp(60.0, screenHeight - 160);
+    } else {
+      return (_selectionTop - 80).clamp(20.0, screenHeight - 160);
+    }
+  }
+
+  /// 退出选择模式
+  void _exitSelectionMode() {
+    final webview = _webviewKey.currentState;
+    webview?.clearSelection();
+    setState(() {
+      _selectionMode = false;
+      _showSelectionPopup = false;
+      _selectedText = '';
+      _explaining = false;
+    });
+  }
+
+  /// AI 解释：构建请求并调用 API
+  Future<void> _onAiExplain() async {
+    if (_selectedText.isEmpty) return;
+
+    final webview = _webviewKey.currentState;
+    if (webview == null) return;
+
+    setState(() => _explaining = true);
+
+    try {
+      // 1. 从章节文本获取前一段落上下文（Dart 侧处理，JS 只做最轻量的事）
+      final prevPara = _vm.getPreviousParagraph(_selectedText);
+
+      // 2. 构建 Prompt
+      final bookTitle = _vm.book.title;
+      final chapterTitle = _vm.chapterTitles.isNotEmpty
+          ? _vm.chapterTitles[_vm.currentChapterIndex]
+          : '';
+
+      final prompt = '''
+你是专业的文学阅读助手。请结合上下文，解释用户选中的文字在书中的含义。
+
+书籍：《$bookTitle》
+${chapterTitle.isNotEmpty ? "章节：$chapterTitle" : ""}
+${prevPara.isNotEmpty ? "上文（选中文字前的一段）：\n$prevPara\n" : ""}
+选中文字：$_selectedText
+
+请深入浅出地解释这段文字的含义，包括字面意思和深层含义。''';
+
+      // 3. 调用 API
+      final result = await _callExplanationApi(prompt);
+
+      if (!mounted) return;
+
+      // 4. 显示结果
+      _exitSelectionMode();
+      _showExplanationResult(result);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _explaining = false);
+      _showLLMErrorDialog('请求失败: $e');
+    }
+  }
+
+  /// 调用 OpenAI 兼容接口（非流式）
+  Future<String> _callExplanationApi(String prompt) async {
+    final settings = _settingsService.settings;
+    if (settings.aiApiKey.isEmpty) {
+      throw Exception('请先在设置页填写 API Key');
+    }
+    try {
+      final request = http.Request('POST', Uri.parse('${settings.aiApiUrl}/chat/completions'));
+      request.headers['Authorization'] = 'Bearer ${settings.aiApiKey}';
+      request.headers['Content-Type'] = 'application/json';
+      request.body = jsonEncode({
+        'model': settings.aiModel,
+        'messages': [
+          {
+            'role': 'system',
+            'content': '你是一个专业的文学阅读助手。请用中文回答，解释简洁准确。',
+          },
+          {'role': 'user', 'content': prompt},
+        ],
+        'stream': false,
+      });
+      final streamedResponse = await http.Client().send(request);
+      final response = await http.Response.fromStream(streamedResponse);
+      if (response.statusCode != 200) {
+        throw Exception('API 错误 ${response.statusCode}: ${response.body}');
+      }
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final choices = data['choices'] as List?;
+      if (choices == null || choices.isEmpty) {
+        throw Exception('API 返回为空');
+      }
+      final resultContent = choices[0]['message']['content'] as String? ?? '';
+      return resultContent.trim();
+    } catch (e) {
+      throw Exception('请求失败: $e');
+    }
+  }
+
+  /// 展示 AI 解释结果
+  void _showExplanationResult(String content) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.auto_awesome,
+                size: 20, color: Theme.of(ctx).colorScheme.primary),
+            const SizedBox(width: 8),
+            const Text('AI 解释'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 选中文字预览
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Theme.of(ctx)
+                      .colorScheme
+                      .surfaceContainerHighest
+                      .withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '"$_selectedText"',
+                  style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // 解释内容
+              SelectableText(
+                content,
+                style: Theme.of(ctx).textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -286,11 +488,32 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                   settings: _vm.settings,
                   onScroll: _vm.onScrollSettled,
                   onPageReady: _vm.onPageReady,
-                ),
-                GestureLayer(
+                  onSelectionChanged: _onSelectionChanged,
                   onTapCenter: _toggleBars,
                   onDoubleTap: _onTtsPlay,
                 ),
+
+
+                // ── 文字选择浮动菜单 ──
+                if (_showSelectionPopup && _selectedText.isNotEmpty)
+                  Positioned(
+                    top: _calculatePopupTop(context),
+                    left: _selectionLeft.clamp(8.0,
+                        MediaQuery.of(context).size.width - 200),
+                    child: _explaining
+                        ? const SizedBox(
+                            width: 48,
+                            height: 48,
+                            child: Center(child: CircularProgressIndicator(strokeWidth: 3)),
+                          )
+                        : TextSelectionPopup(
+                            selectedText: _selectedText,
+                            onExplain: _onAiExplain,
+                            onDismiss: _exitSelectionMode,
+                          ),
+                  ),
+
+                // ── 浮动朗读按钮 ──
                 if (_vm.showFloatButtons)
                   Positioned(
                     bottom: 80,
@@ -313,9 +536,12 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                     ),
                   ),
                 Positioned(
-                  top: 0, left: 0, right: 0,
+                  top: 0,
+                  left: 0,
+                  right: 0,
                   child: AnimatedSlide(
-                    offset: _barsVisible ? Offset.zero : const Offset(0, -1),
+                    offset:
+                        _barsVisible ? Offset.zero : const Offset(0, -1),
                     duration: const Duration(milliseconds: 200),
                     child: ReaderTopBar(
                       bookTitle: _vm.book.title,
@@ -327,9 +553,12 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                   ),
                 ),
                 Positioned(
-                  bottom: 0, left: 0, right: 0,
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
                   child: AnimatedSlide(
-                    offset: _barsVisible ? Offset.zero : const Offset(0, 1),
+                    offset:
+                        _barsVisible ? Offset.zero : const Offset(0, 1),
                     duration: const Duration(milliseconds: 200),
                     child: ReaderBottomBar(
                       onChapterList: _toggleChapterPanel,
@@ -345,7 +574,8 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                 if (_showChapterPanel)
                   Positioned.fill(
                     child: GestureDetector(
-                      onTap: () => setState(() => _showChapterPanel = false),
+                      onTap: () =>
+                          setState(() => _showChapterPanel = false),
                       child: Container(color: Colors.black26),
                     ),
                   ),
@@ -353,8 +583,10 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                   Positioned(
                     left: 0,
                     right: 0,
-                    bottom: 64 + MediaQuery.of(context).padding.bottom,
-                    height: MediaQuery.of(context).size.height * 0.5,
+                    bottom:
+                        64 + MediaQuery.of(context).padding.bottom,
+                    height:
+                        MediaQuery.of(context).size.height * 0.5,
                     child: Material(
                       elevation: 8,
                       borderRadius: const BorderRadius.vertical(
@@ -366,7 +598,8 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                         currentIndex: _vm.currentChapterIndex,
                         onTap: (i) {
                           _vm.goToChapter(i, userInitiated: true);
-                          setState(() => _showChapterPanel = false);
+                          setState(
+                              () => _showChapterPanel = false);
                         },
                       ),
                     ),

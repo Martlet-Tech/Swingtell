@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../../../core/models/reader_settings.dart';
@@ -8,6 +9,9 @@ class ReaderWebview extends StatefulWidget {
   final ReaderSettings settings;
   final void Function(String visibleText) onScroll;
   final VoidCallback? onPageReady;
+  final void Function(Map<String, dynamic> data)? onSelectionChanged;
+  final VoidCallback? onTapCenter;
+  final VoidCallback? onDoubleTap;
 
   const ReaderWebview({
     super.key,
@@ -15,6 +19,9 @@ class ReaderWebview extends StatefulWidget {
     required this.settings,
     required this.onScroll,
     this.onPageReady,
+    this.onSelectionChanged,
+    this.onTapCenter,
+    this.onDoubleTap,
   });
 
   @override
@@ -33,6 +40,28 @@ class ReaderWebviewState extends State<ReaderWebview> {
         'ScrollBridge',
         onMessageReceived: (msg) {
           widget.onScroll(msg.message);
+        },
+      )
+      ..addJavaScriptChannel(
+        'SelectionBridge',
+        onMessageReceived: (msg) {
+          if (widget.onSelectionChanged != null) {
+            try {
+              final data = jsonDecode(msg.message) as Map<String, dynamic>;
+              widget.onSelectionChanged!(data);
+            } catch (_) {}
+          }
+        },
+      )
+      ..addJavaScriptChannel(
+        'TapBridge',
+        onMessageReceived: (msg) {
+          final type = msg.message;
+          if (type == 'single_tap') {
+            widget.onTapCenter?.call();
+          } else if (type == 'double_tap') {
+            widget.onDoubleTap?.call();
+          }
         },
       )
       ..setNavigationDelegate(NavigationDelegate(
@@ -55,6 +84,7 @@ class ReaderWebviewState extends State<ReaderWebview> {
   Future<void> _onPageReady() async {
     await _injectCss(widget.settings);
     await _injectTtsFeatures();
+    await _injectTapAndSelection();
     widget.onPageReady?.call();
   }
 
@@ -69,9 +99,13 @@ class ReaderWebviewState extends State<ReaderWebview> {
         background-color: #${theme.bg.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)};
         margin: 16px 20px;
         word-break: break-all;
+        user-select: text;
+        -webkit-user-select: text;
+        -webkit-touch-callout: none;
       }
       img { max-width: 100%; height: auto; }
       p { margin: 0 0 1em 0; }
+      ::selection { background: rgba(100, 180, 255, 0.3); }
     ''';
     await _controller.runJavaScript(
       "document.getElementById('reader-style').textContent = `$css`;",
@@ -194,6 +228,69 @@ class ReaderWebviewState extends State<ReaderWebview> {
     ''');
   }
 
+  Future<void> _injectTapAndSelection() async {
+    await _controller.runJavaScript('''
+      (function() {
+        if (window._textSelectionInjected) return;
+        window._textSelectionInjected = true;
+
+        // Tap / Double-tap 检测（JS 只做事件识别 + 回传）
+        var _lastTapTime = 0;
+        var _tapTimer = null;
+
+        document.addEventListener('click', function(e) {
+          if (e.button !== 0) return;
+          var now = Date.now();
+          if (now - _lastTapTime < 350) {
+            if (_tapTimer) { clearTimeout(_tapTimer); _tapTimer = null; }
+            _lastTapTime = 0;
+            TapBridge.postMessage('double_tap');
+          } else {
+            _lastTapTime = now;
+            _tapTimer = setTimeout(function() {
+              _tapTimer = null;
+              TapBridge.postMessage('single_tap');
+            }, 350);
+          }
+        });
+
+        // 抑制系统右键菜单
+        document.addEventListener('contextmenu', function(e) {
+          e.preventDefault();
+          return false;
+        });
+
+        // 选中文字变化时通知 Flutter
+        var _lastText = '';
+        document.addEventListener('selectionchange', function() {
+          var sel = window.getSelection();
+          if (!sel) return;
+          var text = sel.toString().trim();
+          if (text.length > 0 && text !== _lastText) {
+            _lastText = text;
+            try {
+              var range = sel.getRangeAt(0);
+              var rect = range.getBoundingClientRect();
+              SelectionBridge.postMessage(JSON.stringify({
+                type: 'selection', text: text,
+                top: rect.top, bottom: rect.bottom,
+                left: rect.left, right: rect.right, scrollY: window.scrollY
+              }));
+            } catch(e) {
+              SelectionBridge.postMessage(JSON.stringify({
+                type: 'selection', text: text,
+                top: window.innerHeight / 2, left: 20
+              }));
+            }
+          } else if (text.length === 0 && _lastText.length > 0) {
+            _lastText = '';
+            SelectionBridge.postMessage(JSON.stringify({type: 'clear'}));
+          }
+        });
+      })();
+    ''');
+  }
+
   // ── Public methods ─────────────────────────────────
 
   Future<void> updateStyle(ReaderSettings s) async {
@@ -228,7 +325,7 @@ class ReaderWebviewState extends State<ReaderWebview> {
     if (text.isEmpty) return;
     final safe = text
         .substring(0, text.length > 20 ? 20 : text.length)
-        .replaceAll('\\\\', '\\\\\\\\')
+        .replaceAll('\\', '\\\\')
         .replaceAll("'", "\\'")
         .replaceAll('\n', ' ');
     await _controller.runJavaScript(
@@ -254,6 +351,11 @@ class ReaderWebviewState extends State<ReaderWebview> {
     await _controller.runJavaScript(
       "window.showTopMask($visible, 'rgb($r,$g,$b)');",
     );
+  }
+
+  /// 清除当前选中
+  Future<void> clearSelection() async {
+    await _controller.runJavaScript('window.getSelection().removeAllRanges();');
   }
 
   @override
