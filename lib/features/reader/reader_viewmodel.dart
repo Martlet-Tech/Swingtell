@@ -119,6 +119,17 @@ class ReaderViewModel extends ChangeNotifier {
     if (state.chapterIndex != _currentChapterIndex && state.isPlaying) {
       goToChapter(state.chapterIndex);
     }
+    // 同步保存阅读进度（TTS 段落前进时）
+    if (state.isPlaying) {
+      final chapterIndex = state.chapterIndex;
+      if (chapterIndex >= 0 && chapterIndex < _chapterTexts.length) {
+        _progress.chapterIndex = chapterIndex;
+        final offset = _charOffsetAtParagraph(state.paragraphIndex);
+        _progress.charOffset = offset;
+        _progress.percentage = _calcPercentage();
+        _progressService.saveProgress(_progress);
+      }
+    }
     notifyListeners();
   }
 
@@ -200,6 +211,23 @@ class ReaderViewModel extends ChangeNotifier {
       final paraEnd = end == -1 ? text.length : end;
       if (text.substring(i, paraEnd).trim().isNotEmpty) {
         if (charOffset >= i && charOffset < paraEnd) return count;
+        count++;
+      }
+      i = end == -1 ? text.length : end + 1;
+    }
+    return 0;
+  }
+
+  int _charOffsetAtParagraph(int paragraphIndex) {
+    final text = _plainText;
+    int count = 0;
+    for (int i = 0; i < text.length;) {
+      while (i < text.length && text[i] == '\n') { i++; }
+      if (i >= text.length) break;
+      final end = text.indexOf('\n', i);
+      final paraEnd = end == -1 ? text.length : end;
+      if (text.substring(i, paraEnd).trim().isNotEmpty) {
+        if (count == paragraphIndex) return i;
         count++;
       }
       i = end == -1 ? text.length : end + 1;

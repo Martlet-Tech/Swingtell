@@ -127,6 +127,17 @@ class ReaderWebviewState extends State<ReaderWebview> {
           window.scrollTo({ top: targetScrollY, behavior: 'smooth' });
         };
 
+        window.jumpToAnchor = function(searchText) {
+          var anchor = searchText.substring(0, Math.min(20, searchText.length));
+          var el = findElement(anchor);
+          if (!el) return;
+          var rect = el.getBoundingClientRect();
+          var absoluteTop = rect.top + window.scrollY;
+          var targetScrollY = absoluteTop - window.innerHeight * 0.25;
+          targetScrollY = Math.max(0, targetScrollY);
+          window.scrollTo({ top: targetScrollY, behavior: 'instant' });
+        };
+
         window.clearHighlight = function() {
           if (_hlEl) {
             _hlEl.style.backgroundColor = '';
@@ -210,6 +221,18 @@ class ReaderWebviewState extends State<ReaderWebview> {
         .replaceAll('\n', ' ');
     await _controller.runJavaScript(
       "window.scrollToAnchor('$safe');",
+    );
+  }
+
+  Future<void> jumpToAnchor(String text) async {
+    if (text.isEmpty) return;
+    final safe = text
+        .substring(0, text.length > 20 ? 20 : text.length)
+        .replaceAll('\\\\', '\\\\\\\\')
+        .replaceAll("'", "\\'")
+        .replaceAll('\n', ' ');
+    await _controller.runJavaScript(
+      "window.jumpToAnchor('$safe');",
     );
   }
 

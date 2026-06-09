@@ -46,7 +46,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     _vm.onTtsStateChanged = _onTtsStateChanged;
     _vm.onRestoreScroll = (text) {
       final webview = _webviewKey.currentState;
-      webview?.scrollToAnchor(text);
+      webview?.jumpToAnchor(text);
       _vm.markProgrammaticScroll();
     };
     _vm.init();
