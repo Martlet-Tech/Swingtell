@@ -21,6 +21,7 @@ class ReaderViewModel extends ChangeNotifier {
   List<String> _chapters = [];
   List<String> _chapterTexts = [];
   List<String> _chapterTitles = [];
+  List<int> _chapterLevels = [];
   ReadingProgress _progress = ReadingProgress();
   int _currentChapterIndex = 0;
   String? _currentHtml;
@@ -60,6 +61,7 @@ class ReaderViewModel extends ChangeNotifier {
   Book get book => _book;
   List<String> get chapters => _chapters;
   List<String> get chapterTitles => _chapterTitles;
+  List<int> get chapterLevels => _chapterLevels;
   String? get currentHtml => _currentHtml;
   int get currentChapterIndex => _currentChapterIndex;
   bool get isLoading => _loading;
@@ -91,6 +93,7 @@ class ReaderViewModel extends ChangeNotifier {
       _chapters = await _epubService.extractChapters(_book.filePath);
       _chapterTexts = await _epubService.extractChapterTexts(_book.filePath);
       _chapterTitles = await _epubService.extractChapterTitles(_book.filePath);
+      _chapterLevels = await _epubService.extractChapterLevels(_book.filePath);
 
       _progress = _progressService.getProgress(_book.id);
       _currentChapterIndex = _progress.chapterIndex;

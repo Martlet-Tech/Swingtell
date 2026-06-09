@@ -27,28 +27,54 @@ class EpubService {
     final bytes = await File(filePath).readAsBytes();
     final epub = await EpubReader.readBook(bytes);
     final chapters = <String>[];
-    for (final chapter in epub.Chapters ?? []) {
-      final html = _buildChapterHtml(chapter, epub);
-      if (html.trim().isNotEmpty) chapters.add(html);
-      for (final sub in chapter.SubChapters ?? []) {
-        final subHtml = _buildChapterHtml(sub, epub);
-        if (subHtml.trim().isNotEmpty) chapters.add(subHtml);
+    _collectChapterHtmls(epub.Chapters ?? [], chapters, epub);
+    return chapters;
+  }
+
+  void _collectChapterHtmls(
+      List<EpubChapter> src, List<String> out, EpubBook epub) {
+    for (final ch in src) {
+      final html = _buildChapterHtml(ch, epub);
+      if (html.trim().isNotEmpty) out.add(html);
+      if (ch.SubChapters != null && ch.SubChapters!.isNotEmpty) {
+        _collectChapterHtmls(ch.SubChapters!, out, epub);
       }
     }
-    return chapters;
   }
 
   Future<List<String>> extractChapterTitles(String filePath) async {
     final bytes = await File(filePath).readAsBytes();
     final epub = await EpubReader.readBook(bytes);
     final titles = <String>[];
-    for (final chapter in epub.Chapters ?? []) {
-      if ((chapter.Title ?? '').trim().isNotEmpty) titles.add(chapter.Title!);
-      for (final sub in chapter.SubChapters ?? []) {
-        if ((sub.Title ?? '').trim().isNotEmpty) titles.add(sub.Title!);
+    _collectChapterTitles(epub.Chapters ?? [], titles);
+    return titles;
+  }
+
+  Future<List<int>> extractChapterLevels(String filePath) async {
+    final bytes = await File(filePath).readAsBytes();
+    final epub = await EpubReader.readBook(bytes);
+    final levels = <int>[];
+    _collectChapterLevels(epub.Chapters ?? [], 0, levels);
+    return levels;
+  }
+
+  void _collectChapterLevels(
+      List<EpubChapter> src, int depth, List<int> out) {
+    for (final ch in src) {
+      if ((ch.Title ?? '').trim().isNotEmpty) out.add(depth);
+      if (ch.SubChapters != null && ch.SubChapters!.isNotEmpty) {
+        _collectChapterLevels(ch.SubChapters!, depth + 1, out);
       }
     }
-    return titles;
+  }
+
+  void _collectChapterTitles(List<EpubChapter> src, List<String> out) {
+    for (final ch in src) {
+      if ((ch.Title ?? '').trim().isNotEmpty) out.add(ch.Title!);
+      if (ch.SubChapters != null && ch.SubChapters!.isNotEmpty) {
+        _collectChapterTitles(ch.SubChapters!, out);
+      }
+    }
   }
 
   Future<List<String>> extractChapterTexts(String filePath) async {

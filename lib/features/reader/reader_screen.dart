@@ -30,6 +30,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   late SettingsService _settingsService;
   final _webviewKey = GlobalKey<ReaderWebviewState>();
   bool _barsVisible = false;
+  bool _showChapterPanel = false;
 
   @override
   void initState() {
@@ -157,15 +158,8 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     if (mounted) Navigator.pop(context);
   }
 
-  void _showChapterList() {
-    showModalBottomSheet(
-      context: context,
-      builder: (_) => ChapterListSheet(
-        titles: _vm.chapterTitles,
-        currentIndex: _vm.currentChapterIndex,
-          onTap: (i) => _vm.goToChapter(i, userInitiated: true),
-      ),
-    );
+  void _toggleChapterPanel() {
+    setState(() => _showChapterPanel = !_showChapterPanel);
   }
 
   void _showColorTheme() {
@@ -338,7 +332,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                     offset: _barsVisible ? Offset.zero : const Offset(0, 1),
                     duration: const Duration(milliseconds: 200),
                     child: ReaderBottomBar(
-                      onChapterList: _showChapterList,
+                      onChapterList: _toggleChapterPanel,
                       onColorTheme: _showColorTheme,
                       onFontSettings: _showFontSettings,
                       onTtsPlay: _onTtsPlay,
@@ -347,6 +341,36 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
                     ),
                   ),
                 ),
+                // ── 章节目录面板 ──
+                if (_showChapterPanel)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _showChapterPanel = false),
+                      child: Container(color: Colors.black26),
+                    ),
+                  ),
+                if (_showChapterPanel)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 64 + MediaQuery.of(context).padding.bottom,
+                    height: MediaQuery.of(context).size.height * 0.5,
+                    child: Material(
+                      elevation: 8,
+                      borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(12)),
+                      clipBehavior: Clip.antiAlias,
+                      child: ChapterListSheet(
+                        titles: _vm.chapterTitles,
+                        levels: _vm.chapterLevels,
+                        currentIndex: _vm.currentChapterIndex,
+                        onTap: (i) {
+                          _vm.goToChapter(i, userInitiated: true);
+                          setState(() => _showChapterPanel = false);
+                        },
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
