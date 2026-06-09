@@ -123,9 +123,38 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     setState(() => _barsVisible = !_barsVisible);
   }
 
-  void _onBack() {
+  Future<void> _onBack() async {
     _vm.onAppPause();
-    Navigator.pop(context);
+    if (_vm.isTtsPlaying) {
+      final result = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('朗读中'),
+          content: const Text('当前正在朗读，返回书架后是否继续朗读？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'cancel'),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'stop'),
+              child: const Text('停止朗读'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, 'continue'),
+              child: const Text('继续朗读'),
+            ),
+          ],
+        ),
+      );
+      if (result == 'stop') {
+        await _vm.stopTts();
+      } else if (result == 'cancel' || result == null) {
+        return; // 取消，留在当前页
+      }
+      // result == 'continue': 保持 TTS 播放，返回书架
+    }
+    if (mounted) Navigator.pop(context);
   }
 
   void _showChapterList() {
@@ -248,69 +277,75 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
 
         final theme = kColorThemes[_vm.settings.colorThemeIndex];
 
-        return Scaffold(
-          backgroundColor: theme.bg,
-          body: Stack(
-            children: [
-              ReaderWebview(
-                key: _webviewKey,
-                chapterHtml: html,
-                settings: _vm.settings,
-                onScroll: _vm.onScrollSettled,
-                onPageReady: _vm.onPageReady,
-              ),
-              GestureLayer(onTapCenter: _toggleBars),
-              if (_vm.showFloatButtons)
+        return PopScope(
+          canPop: !_vm.isTtsPlaying,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop) _onBack();
+          },
+          child: Scaffold(
+            backgroundColor: theme.bg,
+            body: Stack(
+              children: [
+                ReaderWebview(
+                  key: _webviewKey,
+                  chapterHtml: html,
+                  settings: _vm.settings,
+                  onScroll: _vm.onScrollSettled,
+                  onPageReady: _vm.onPageReady,
+                ),
+                GestureLayer(onTapCenter: _toggleBars),
+                if (_vm.showFloatButtons)
+                  Positioned(
+                    bottom: 80,
+                    right: 16,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        _FloatButton(
+                          icon: Icons.keyboard_return,
+                          label: '回到朗读处',
+                          onTap: _onReturnToTts,
+                        ),
+                        const SizedBox(height: 8),
+                        _FloatButton(
+                          icon: Icons.play_arrow,
+                          label: '在这开始读',
+                          onTap: _onStartTtsHere,
+                        ),
+                      ],
+                    ),
+                  ),
                 Positioned(
-                  bottom: 80,
-                  right: 16,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      _FloatButton(
-                        icon: Icons.keyboard_return,
-                        label: '回到朗读处',
-                        onTap: _onReturnToTts,
-                      ),
-                      const SizedBox(height: 8),
-                      _FloatButton(
-                        icon: Icons.play_arrow,
-                        label: '在这开始读',
-                        onTap: _onStartTtsHere,
-                      ),
-                    ],
+                  top: 0, left: 0, right: 0,
+                  child: AnimatedSlide(
+                    offset: _barsVisible ? Offset.zero : const Offset(0, -1),
+                    duration: const Duration(milliseconds: 200),
+                    child: ReaderTopBar(
+                      bookTitle: _vm.book.title,
+                      chapterTitle: _vm.chapterTitles.isNotEmpty
+                          ? _vm.chapterTitles[_vm.currentChapterIndex]
+                          : '',
+                      onBack: _onBack,
+                    ),
                   ),
                 ),
-              Positioned(
-                top: 0, left: 0, right: 0,
-                child: AnimatedSlide(
-                  offset: _barsVisible ? Offset.zero : const Offset(0, -1),
-                  duration: const Duration(milliseconds: 200),
-                  child: ReaderTopBar(
-                    bookTitle: _vm.book.title,
-                    chapterTitle: _vm.chapterTitles.isNotEmpty
-                        ? _vm.chapterTitles[_vm.currentChapterIndex]
-                        : '',
-                    onBack: _onBack,
+                Positioned(
+                  bottom: 0, left: 0, right: 0,
+                  child: AnimatedSlide(
+                    offset: _barsVisible ? Offset.zero : const Offset(0, 1),
+                    duration: const Duration(milliseconds: 200),
+                    child: ReaderBottomBar(
+                      onChapterList: _showChapterList,
+                      onColorTheme: _showColorTheme,
+                      onFontSettings: _showFontSettings,
+                      onTtsPlay: _onTtsPlay,
+                      onTtsSettings: _showTtsSettings,
+                      isTtsPlaying: _vm.isTtsPlaying,
+                    ),
                   ),
                 ),
-              ),
-              Positioned(
-                bottom: 0, left: 0, right: 0,
-                child: AnimatedSlide(
-                  offset: _barsVisible ? Offset.zero : const Offset(0, 1),
-                  duration: const Duration(milliseconds: 200),
-                  child: ReaderBottomBar(
-                    onChapterList: _showChapterList,
-                    onColorTheme: _showColorTheme,
-                    onFontSettings: _showFontSettings,
-                    onTtsPlay: _onTtsPlay,
-                    onTtsSettings: _showTtsSettings,
-                    isTtsPlaying: _vm.isTtsPlaying,
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
