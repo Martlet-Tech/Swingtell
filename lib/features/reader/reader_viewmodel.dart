@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:epubx/epubx.dart';
 import '../../core/models/book.dart';
 import '../../core/models/reading_progress.dart';
 import '../../core/models/reader_settings.dart';
@@ -18,7 +19,7 @@ class ReaderViewModel extends ChangeNotifier {
   final TtsPipeline _ttsPipeline;
   final Book _book;
 
-  List<String> _chapters = [];
+  EpubBook? _epubBook;
   List<String> _chapterTexts = [];
   List<String> _chapterTitles = [];
   List<int> _chapterLevels = [];
@@ -59,7 +60,6 @@ class ReaderViewModel extends ChangeNotifier {
         _book = book;
 
   Book get book => _book;
-  List<String> get chapters => _chapters;
   List<String> get chapterTitles => _chapterTitles;
   List<int> get chapterLevels => _chapterLevels;
   String? get currentHtml => _currentHtml;
@@ -114,14 +114,17 @@ class ReaderViewModel extends ChangeNotifier {
 
   Future<void> init() async {
     try {
-      _chapters = await _epubService.extractChapters(_book.filePath);
-      _chapterTexts = await _epubService.extractChapterTexts(_book.filePath);
-      _chapterTitles = await _epubService.extractChapterTitles(_book.filePath);
-      _chapterLevels = await _epubService.extractChapterLevels(_book.filePath);
+      _epubBook = await _epubService.parseBook(_book.filePath);
+
+      _chapterTexts = _epubService.extractTextsFrom(_epubBook!);
+      _chapterTitles = _epubService.extractTitlesFrom(_epubBook!);
+      _chapterLevels = _epubService.extractLevelsFrom(_epubBook!);
 
       _progress = _progressService.getProgress(_book.id);
       _currentChapterIndex = _progress.chapterIndex;
-      _currentHtml = _chapters.isNotEmpty ? _chapters[_currentChapterIndex] : null;
+      if (_chapterTexts.isNotEmpty) {
+        _currentHtml = _epubService.buildChapterHtml(_epubBook!, _currentChapterIndex);
+      }
 
       _settingsService.addListener(_onSettingsChanged);
       _ttsStateSub = _ttsPipeline.stateStream.listen(_onTtsStateChanged);
@@ -199,9 +202,9 @@ class ReaderViewModel extends ChangeNotifier {
 
   double _calcPercentage() {
     final text = _plainText;
-    if (text.isEmpty) return 0;
-    return (_currentChapterIndex / _chapters.length) +
-        (_progress.charOffset / text.length) * (1 / _chapters.length);
+    if (text.isEmpty || _chapterTexts.isEmpty) return 0;
+    return (_currentChapterIndex / _chapterTexts.length) +
+        (_progress.charOffset / text.length) * (1 / _chapterTexts.length);
   }
 
   int _findCharOffset(String visibleText) {
@@ -263,7 +266,8 @@ class ReaderViewModel extends ChangeNotifier {
   }
 
   void goToChapter(int index, {bool userInitiated = false}) {
-    if (index < 0 || index >= _chapters.length) return;
+    if (index < 0 || index >= _chapterTexts.length) return;
+    if (_epubBook == null) return;
     if (userInitiated) {
       _progressService.saveProgress(_progress);
       _ttsPipeline.stop();
@@ -272,7 +276,7 @@ class ReaderViewModel extends ChangeNotifier {
     _progress.chapterIndex = index;
     _progress.charOffset = 0;
     _currentChapterIndex = index;
-    _currentHtml = _chapters[index];
+    _currentHtml = _epubService.buildChapterHtml(_epubBook!, index);
     notifyListeners();
   }
 
@@ -374,6 +378,7 @@ class ReaderViewModel extends ChangeNotifier {
 
   @override
   void dispose() {
+    _epubBook = null;
     _settingsService.removeListener(_onSettingsChanged);
     _floatButtonTimer?.cancel();
     _ttsStateSub?.cancel();
