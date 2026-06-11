@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../bookshelf/bookshelf_screen.dart';
 import '../settings/settings_screen.dart';
 import '../chat/chat_list_screen.dart';
+import '../news/news_list_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -41,6 +42,14 @@ class HomeScreen extends StatelessWidget {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const ChatListScreen()),
+            ),
+          ),
+          _HomeCard(
+            icon: Icons.newspaper,
+            label: 'AI 新闻',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const NewsListScreen()),
             ),
           ),
         ],

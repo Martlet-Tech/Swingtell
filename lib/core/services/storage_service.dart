@@ -6,6 +6,7 @@ import '../models/book.dart';
 import '../models/reading_progress.dart';
 import '../models/reader_settings.dart';
 import '../models/chat_session.dart';
+import '../models/news_topic.dart';
 
 class StorageService {
   late Box<Book> _bookBox;
@@ -16,6 +17,7 @@ class StorageService {
     Hive.registerAdapter(ReadingProgressAdapter());
     Hive.registerAdapter(ReaderSettingsAdapter());
     Hive.registerAdapter(ChatSessionAdapter());
+    Hive.registerAdapter(NewsTopicAdapter());
     _bookBox = await Hive.openBox<Book>('books');
     await _openOrResetBox<ReadingProgress>('progress');
     await _openOrResetBox<ReaderSettings>('settings');

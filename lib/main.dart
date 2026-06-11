@@ -6,6 +6,8 @@ import 'core/services/settings_service.dart';
 import 'core/services/epub_service.dart';
 import 'core/services/chat_storage_service.dart';
 import 'core/services/chat_service.dart';
+import 'core/services/news_storage_service.dart';
+import 'core/services/news_service.dart';
 import 'core/services/tts/tts_pipeline_impl.dart';
 import 'core/services/tts/tts_pipeline.dart';
 import 'app.dart';
@@ -26,6 +28,10 @@ void main() async {
   final chatStorageService = ChatStorageService();
   final chatService = ChatService(settingsService);
 
+  final newsStorageService = NewsStorageService();
+  await newsStorageService.init();
+  final newsService = NewsService(settingsService);
+
   final ttsPipeline = TtsPipelineImpl(settings: settingsService);
   await ttsPipeline.init();
 
@@ -39,6 +45,8 @@ void main() async {
         Provider<TtsPipeline>.value(value: ttsPipeline),
         Provider<ChatStorageService>.value(value: chatStorageService),
         Provider<ChatService>.value(value: chatService),
+        Provider<NewsStorageService>.value(value: newsStorageService),
+        Provider<NewsService>.value(value: newsService),
       ],
       child: const App(),
     ),

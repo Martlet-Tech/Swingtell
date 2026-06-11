@@ -64,6 +64,9 @@ dependencies:
   # UUID 生成
   uuid: ^4.4.0
 
+  # RSS/XML 解析
+  xml: ^6.3.0
+
   # Hive (direct dependency for models)
   hive: ^2.2.3
 
@@ -76,6 +79,9 @@ dependencies:
 
   # 保持不息屏
   wakelock_plus: ^1.5.2
+
+  # 打开外部链接
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:
