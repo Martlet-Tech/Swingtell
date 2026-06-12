@@ -8,6 +8,7 @@ import 'core/services/chat_storage_service.dart';
 import 'core/services/chat_service.dart';
 import 'core/services/news_storage_service.dart';
 import 'core/services/news_service.dart';
+import 'core/services/timeline_service.dart';
 import 'core/services/tts/tts_pipeline_impl.dart';
 import 'core/services/tts/tts_pipeline.dart';
 import 'app.dart';
@@ -31,6 +32,7 @@ void main() async {
   final newsStorageService = NewsStorageService();
   await newsStorageService.init();
   final newsService = NewsService(settingsService);
+  final timelineService = TimelineService(settingsService);
 
   final ttsPipeline = TtsPipelineImpl(settings: settingsService);
   await ttsPipeline.init();
@@ -47,6 +49,7 @@ void main() async {
         Provider<ChatService>.value(value: chatService),
         Provider<NewsStorageService>.value(value: newsStorageService),
         Provider<NewsService>.value(value: newsService),
+        Provider<TimelineService>.value(value: timelineService),
       ],
       child: const App(),
     ),

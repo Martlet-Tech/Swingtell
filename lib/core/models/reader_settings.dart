@@ -22,11 +22,19 @@ class ReaderSettings extends HiveObject {
   @HiveField(12) int ttsCorrectionModeIndex = 0;
   @HiveField(13) int llmBufferChars = 1500;
   @HiveField(14) int llmBatchChars = 500;
+  @HiveField(15) DateTime? timelineAnchorReal;
+  @HiveField(16) DateTime? timelineAnchorHistory;
 
   TtsCorrectionMode get ttsCorrectionMode =>
       TtsCorrectionMode.values[ttsCorrectionModeIndex];
   set ttsCorrectionMode(TtsCorrectionMode mode) =>
       ttsCorrectionModeIndex = mode.index;
+
+  DateTime? get todayInTimeline {
+    if (timelineAnchorReal == null || timelineAnchorHistory == null) return null;
+    final offsetDays = DateTime.now().difference(timelineAnchorReal!).inDays;
+    return timelineAnchorHistory!.add(Duration(days: offsetDays));
+  }
 
   ReaderSettings copyWith({
     String? fontFamily,
@@ -42,6 +50,8 @@ class ReaderSettings extends HiveObject {
     TtsCorrectionMode? ttsCorrectionMode,
     int? llmBufferChars,
     int? llmBatchChars,
+    DateTime? timelineAnchorReal,
+    DateTime? timelineAnchorHistory,
   }) =>
       ReaderSettings()
         ..fontFamily = fontFamily ?? this.fontFamily
@@ -56,5 +66,7 @@ class ReaderSettings extends HiveObject {
         ..keepScreenOn = keepScreenOn ?? this.keepScreenOn
         ..ttsCorrectionMode = ttsCorrectionMode ?? this.ttsCorrectionMode
         ..llmBufferChars = llmBufferChars ?? this.llmBufferChars
-        ..llmBatchChars = llmBatchChars ?? this.llmBatchChars;
+        ..llmBatchChars = llmBatchChars ?? this.llmBatchChars
+        ..timelineAnchorReal = timelineAnchorReal ?? this.timelineAnchorReal
+        ..timelineAnchorHistory = timelineAnchorHistory ?? this.timelineAnchorHistory;
 }

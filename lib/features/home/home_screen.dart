@@ -3,6 +3,7 @@ import '../bookshelf/bookshelf_screen.dart';
 import '../settings/settings_screen.dart';
 import '../chat/chat_list_screen.dart';
 import '../news/news_list_screen.dart';
+import '../timeline/timeline_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -50,6 +51,14 @@ class HomeScreen extends StatelessWidget {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const NewsListScreen()),
+            ),
+          ),
+          _HomeCard(
+            icon: Icons.public,
+            label: '世界线',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const TimelineScreen()),
             ),
           ),
         ],

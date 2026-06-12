@@ -1,97 +1,127 @@
-# SwingTell 阅读器
+# SwingTell
 
-一个专注于 **中文 TTS（文字转语音）听书** 体验的跨平台 EPUB 电子书阅读器，集成 **AI 角色聊天** 与 **LLM 多音字校正** 能力。
+> **用魔法打败魔法，用 AI 对抗 AI。**  
+> 当全网都在用 AI 生产屎的时候，我用 AI 给自己搭一座信息茧房。
 
-## 功能特性
+---
 
-### 📖 EPUB 阅读
-- 导入 `.epub` 文件，自动解析元数据（书名、作者、封面）
-- HTML 章节在 WebView 中渲染，原生滚动体验
-- 4 种护眼配色主题（暖纸 / 暗夜 / 绿荫 / 羊皮）
+现在的视频网站已经没法看了。
+
+AI 画个大字报封面图，白底红字黄字，标题怎么惊悚怎么来——点进去 30 分钟"精读"一本书，屎一样的 AI 配音配屎一样的 AI 视频。以前刷两三个小时短视频也不觉得烦，现在翻标题半小时，一个都不想点。
+
+就算刨掉 AI 作品，非 AI 的也一样卷得反胃。冷知识、底层逻辑、核心力量、熟成牛排、信息差——看见这些词就腻。
+
+所以我写了这个东西。
+
+> ⚠️ **水平极低警告**：作者对 Flutter / Dart / AI 一窍不通，纯属 vibe coding，代码质量约等于屎上雕花。欢迎高手参与指导／重写／骂醒。PR 和 Issue 都跪谢。
+
+用 AI 的所有手段，反向加固自己的信息茧房。AI 产出的垃圾不想看？那就让 AI 帮我把想看的筛出来、读出来、聊出来。
+
+---
+
+## 功能
+
+| 模块 | 状态 | 描述 |
+|------|------|------|
+| **AI 朗读** | 🟡 勉强能用 | EPUB 听书 + LLM 多音字校正，至少不会把"行"全读成 xíng |
+| **AI 角色聊天** | 🟡 就那么回事 | 自定义角色 + 流式对话，纯自娱自乐 |
+| **AI 新闻总结** | 🟡 勉强能用 | RSS 聚合 + AI 摘要，茧房总得留扇窗 |
+| **世界线变动** | 🟢 做了个开头 | 穿越回某个时间点，亲历那个时代。信源有限，经常啥也查不到 |
+
+### AI 朗读 (TTS 听书)
+
+- EPUB 导入，自动解析书名、作者、封面
+- 双引擎 TTS（flutter_tts → 原生 TTS 自动回退）
+- 选段播放：点哪从哪读
+- 滚动跟随 + 当前句高亮
+- 无感翻章，不打断播放
+- 语速 / 音高调节，屏幕常亮
+- **LLM 多音字校正**：把文本发给 LLM 做上下文消歧，同音替代字替换，让 TTS 不再念白字
+
+### AI 角色聊天
+
+- 创建角色（名字 + 系统提示词）
+- 流式 SSE 对话，兼容 OpenAI API
+- 角色 / 会话本地持久化
+- 角色导入导出（`.echar` 格式，带头像 + 聊天记录）
+
+### AI 新闻总结
+
+- RSS 订阅聚合
+- AI 自动摘要生成
+- 信息茧房留个透气孔
+
+### 世界线变动（开发中）
+
+- 设定时间点，穿越回到那个时代
+- 搜索 / 浏览当时的信息
+- 目前信源有限，勉强不崩
+
+### 阅读体验
+
+- WebView HTML 渲染，原生滚动
+- 4 种护眼主题：暖纸 / 暗夜 / 绿荫 / 羊皮
 - 字体样式 / 字号自由调节
-- 阅读进度自动保存（章节 + 字符偏移 + 百分比）
+- 进度自动保存（章节 + 偏移 + 百分比）
 - 章节列表快速跳转
 
-### 🔊 智能 TTS 听书
-- **双引擎自动切换**：优先使用 `flutter_tts`，回退到平台原生 TTS（Android `TextToSpeech`）
-- **TTS 选段播放**：点击任意位置，从可见段开始朗读
-- **滚动跟随**：朗读时高亮当前句，自动滚动到可视区域
-- **无感翻章**：当前章播完后自动加载下一章，不打断播放
-- **播放控制**：播放 / 暂停 / 恢复，语速 / 音高调节
-- **屏幕常亮**：听书时防止息屏
-
-### 🤖 LLM 多音字校正
-- 将文本发送到兼容 OpenAI 的 API，对中文多音字进行上下文消歧
-- 使用同音替代字替换多音字，让 TTS 朗读更准确
-- 环形缓冲区实现流式 LLM 请求与 TTS 播放的异步管道
-- 支持「本地模式」（直读）与「LLM 校正模式」切换
-
-### 💬 AI 角色聊天
-- 创建自定义聊天角色（名称 + 系统提示词）
-- 流式 SSE 对话，兼容 OpenAI API
-- 角色 / 会话数据持久化存储
-- **角色导入 / 导出**（`.echar` 格式，包含头像与聊天记录）
-
-### ⚙️ 设置
-- AI API 地址 / Key / 模型名配置
-- 阅读主题、字体、TTS 参数全局保存
+---
 
 ## 技术栈
 
 | 层次 | 技术 |
-|---|---|
+|------|------|
 | 语言 / 框架 | Dart 3.11+ / Flutter (Material 3) |
 | 状态管理 | Provider + ChangeNotifier |
 | EPUB 解析 | epubx |
 | 内容渲染 | webview_flutter |
 | 本地存储 | Hive (NoSQL) |
 | TTS | flutter_tts + Android 原生 TTS (MethodChannel) |
-| AI 聊天 | OpenAI 兼容 API (http streaming) |
+| AI | OpenAI 兼容 API (HTTP streaming) |
 | 文件选择 | file_picker |
 | 屏幕常亮 | wakelock_plus |
+
+---
 
 ## 项目结构
 
 ```
 lib/
-├── main.dart                  # 入口：服务初始化 + Provider 注入
+├── main.dart                  # 入口
 ├── app.dart                   # MaterialApp + 路由
 ├── core/
-│   ├── constants/             # 颜色主题常量
-│   ├── models/                # 数据模型（Book, ReadingProgress, ReaderSettings, Chat...）
+│   ├── constants/             # 颜色主题
+│   ├── models/                # 数据模型
 │   └── services/
-│       ├── storage_service.dart       # Hive 初始化 + 图书 CRUD
-│       ├── progress_service.dart      # 阅读进度读写
-│       ├── settings_service.dart      # 设置读写（ChangeNotifier）
-│       ├── epub_service.dart          # EPUB 解析 / HTML 生成
-│       ├── chat_service.dart          # OpenAI 流式聊天
-│       ├── chat_storage_service.dart  # 角色 / 消息持久化 + .echar 导入导出
+│       ├── storage_service.dart
+│       ├── progress_service.dart
+│       ├── settings_service.dart
+│       ├── epub_service.dart
+│       ├── chat_service.dart
+│       ├── chat_storage_service.dart
 │       └── tts/
-│           ├── tts_pipeline.dart           # TTS 接口抽象
-│           ├── tts_pipeline_impl.dart      # 双引擎管线 + LLM 校正
-│           ├── tts_text_corrector.dart     # 文本校正器抽象
-│           ├── native_tts.dart             # Android 原生 TTS 桥接
-│           ├── llm_correction_worker.dart  # LLM 多音字校正工作器
-│           └── correction_ring_buffer.dart # 流式环形缓冲区
+│           ├── tts_pipeline.dart
+│           ├── tts_pipeline_impl.dart
+│           ├── tts_text_corrector.dart
+│           ├── native_tts.dart
+│           ├── llm_correction_worker.dart
+│           └── correction_ring_buffer.dart
 ├── features/
-│   ├── home/                  # 启动页（读书 / AI 聊天入口）
-│   ├── bookshelf/             # 书架（网格展示 + 新增 / 删除）
-│   ├── reader/                # 阅读器（WebView + 手势 + 顶部/底部栏 + TTS 控制面板）
-│   ├── chat/                  # AI 聊天（角色列表 / 对话 / 角色编辑 / 导入导出）
-│   └── settings/              # AI API 配置
-└── shared/widgets/            # 通用组件（图书封面卡片）
+│   ├── home/
+│   ├── bookshelf/
+│   ├── reader/
+│   ├── chat/
+│   └── settings/
+└── shared/widgets/
 ```
+
+---
 
 ## 快速开始
 
 ```bash
-# 1. 获取依赖
 flutter pub get
-
-# 2. 代码生成（Hive TypeAdapter）
 dart run build_runner build --delete-conflicting-outputs
-
-# 3. 运行
 flutter run
 
 # 构建
@@ -100,24 +130,17 @@ flutter build ios        # iOS
 flutter build windows    # Windows
 flutter build linux      # Linux
 flutter build macos      # macOS
-flutter build web        # Web
 ```
 
-> **注意**：Android 11+ 上 `flutter_tts` 可能因包可见性限制无法发现 TTS 引擎，系统会自动回退到原生 TTS。
+> Android 11+ 上 `flutter_tts` 可能因包可见性限制无法发现 TTS 引擎，系统会自动回退到原生 TTS。
+
+---
 
 ## 依赖
 
-- `epubx` — EPUB 解析
-- `webview_flutter` — 章节渲染
-- `hive` / `hive_flutter` — 本地持久化
-- `flutter_tts` — 跨平台 TTS
-- `provider` — 状态管理
-- `http` — AI API 请求
-- `file_picker` — 导入图书 / 角色
-- `wakelock_plus` — 屏幕常亮
-- `share_plus` — 分享
-- `image` — 封面 / 头像处理
-- `archive` — `.echar` 角色包打包
+`epubx` · `webview_flutter` · `hive` / `hive_flutter` · `flutter_tts` · `provider` · `http` · `file_picker` · `wakelock_plus` · `share_plus` · `image` · `archive` · `xml` · `url_launcher`
+
+---
 
 ## 许可证
 

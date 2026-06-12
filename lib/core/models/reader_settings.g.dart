@@ -29,13 +29,15 @@ class ReaderSettingsAdapter extends TypeAdapter<ReaderSettings> {
       ..keepScreenOn = fields[11] as bool
       ..ttsCorrectionModeIndex = fields[12] as int
       ..llmBufferChars = fields[13] as int
-      ..llmBatchChars = fields[14] as int;
+      ..llmBatchChars = fields[14] as int
+      ..timelineAnchorReal = fields[15] as DateTime?
+      ..timelineAnchorHistory = fields[16] as DateTime?;
   }
 
   @override
   void write(BinaryWriter writer, ReaderSettings obj) {
     writer
-      ..writeByte(13)
+      ..writeByte(15)
       ..writeByte(0)
       ..write(obj.fontFamily)
       ..writeByte(1)
@@ -61,7 +63,11 @@ class ReaderSettingsAdapter extends TypeAdapter<ReaderSettings> {
       ..writeByte(13)
       ..write(obj.llmBufferChars)
       ..writeByte(14)
-      ..write(obj.llmBatchChars);
+      ..write(obj.llmBatchChars)
+      ..writeByte(15)
+      ..write(obj.timelineAnchorReal)
+      ..writeByte(16)
+      ..write(obj.timelineAnchorHistory);
   }
 
   @override
